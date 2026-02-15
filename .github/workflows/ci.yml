@@ -38,8 +38,10 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ github.workspace }}
+          file: ${{ github.workspace }}/Dockerfile
           push: false
+          load: true
           tags: loom:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
