@@ -1,0 +1,46 @@
+# Loom example configuration.
+# Copy to loom.toml and set auth via token_file or LOOM_SENSOR_* env vars.
+# Do not commit real tokens. Use LOOM_SENSOR_<sensor_id>=<token> in environment.
+
+[server]
+listen_address = ":8443"
+tls = true
+cert_file = "/etc/loom/tls.crt"
+key_file = "/etc/loom/tls.key"
+# Optional: separate port for health/metrics (no TLS)
+management_listen_address = ":9080"
+
+[auth]
+# token_file = "/etc/loom/tokens.txt"   # one line per "token,sensor_id"
+# Or set LOOM_SENSOR_vps-frankfurt-01 = "secret-token" in env
+
+[limits]
+max_body_size_bytes = 2097152    # 2 MiB
+max_events_per_batch = 500
+max_event_size_bytes = 131072    # 128 KiB
+per_sensor_rps = 50
+
+[enrichment]
+# MaxMind GeoLite2 (download from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
+geoip_db_path = "/var/lib/loom/GeoLite2-City.mmdb"
+asn_db_path = "/var/lib/loom/GeoLite2-ASN.mmdb"
+
+[enrichment.dns]
+enabled = true
+resolver_addr = "127.0.0.1:53"
+cache_ttl_seconds = 300
+max_qps = 10
+
+[output]
+type = "stdout"
+# type = "elasticsearch"
+# elasticsearch_url = "https://localhost:9200"
+# elasticsearch_index = "loom-events"
+# Set LOOM_ELASTICSEARCH_USER and LOOM_ELASTICSEARCH_PASS in env
+
+[logging]
+level = "info"
+format = "json"
+
+[observability]
+metrics_enabled = true
