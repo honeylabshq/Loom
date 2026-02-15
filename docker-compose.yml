@@ -1,6 +1,16 @@
-# Example: run Loom with mounted config and env-based tokens.
-# 1. Copy loom.example.toml to loom.toml (or into a config/ dir with certs).
-# 2. Set LOOM_SENSOR_* in .env (do not commit .env).
+# Run Loom with Docker Compose.
+#
+# Without TLS (dev):
+#   1. cp loom.example.toml loom.toml ; set server.tls = false, leave cert_file/key_file empty.
+#   2. Create .env with LOOM_SENSOR_<id>=<token>. Do not commit .env.
+#   3. docker compose up -d
+#
+# With TLS (production):
+#   1. mkdir -p config
+#   2. cp loom.example.toml config/loom.toml ; put tls.crt and tls.key in config/
+#   3. In config/loom.toml set cert_file = "/etc/loom/tls.crt", key_file = "/etc/loom/tls.key"
+#   4. Use the "config dir" volume below (comment out the single-file volume).
+#   5. .env with LOOM_SENSOR_* as above.
 
 services:
   loom:
@@ -9,18 +19,15 @@ services:
     container_name: loom
     restart: unless-stopped
     ports:
-      - "8443:8443"   # ingest (HTTPS)
+      - "8443:8443"   # ingest (HTTPS or HTTP if tls = false)
       - "9080:9080"   # management (health, metrics)
     volumes:
-      # Option A: single config file
+      # Without TLS: mount only the config file
       - ./loom.toml:/etc/loom/loom.toml:ro
-      # Option B: whole config dir (loom.toml + tls.crt, tls.key, etc.)
+      # With TLS: mount whole config dir (loom.toml + tls.crt + tls.key). Comment out the line above and use:
       # - ./config:/etc/loom:ro
-      # Optional: MaxMind GeoIP/ASN DBs (set paths in loom.toml)
-      # - /path/to/GeoLite2-City.mmdb:/var/lib/loom/GeoLite2-City.mmdb:ro
-      # - /path/to/GeoLite2-ASN.mmdb:/var/lib/loom/GeoLite2-ASN.mmdb:ro
+      # Optional: MaxMind GeoIP/ASN (paths in loom.toml must match)
+      # - ./data/GeoLite2-City.mmdb:/var/lib/loom/GeoLite2-City.mmdb:ro
+      # - ./data/GeoLite2-ASN.mmdb:/var/lib/loom/GeoLite2-ASN.mmdb:ro
     env_file:
       - .env
-    # Or pass tokens explicitly (do not commit):
-    # environment:
-    #   - LOOM_SENSOR_spip01=${LOOM_SENSOR_spip01}
