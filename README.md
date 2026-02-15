@@ -12,6 +12,8 @@ For a step-by-step deployment guide (one Loom + one Spip), see [docs/SETUP_GUIDE
 go build -o loom ./cmd/loom
 ```
 
+**Docker:** `docker build -t loom:latest .` — see [docs/DOCKER.md](docs/DOCKER.md) for run options, Compose, and security notes.
+
 ## Quick start
 
 1. **Configuration**

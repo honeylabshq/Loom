@@ -3,6 +3,7 @@
 
 # Config with secrets (use loom.example.toml as template)
 loom.toml
+.env
 
 # Go
 vendor/

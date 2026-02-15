@@ -1,0 +1,26 @@
+# Example: run Loom with mounted config and env-based tokens.
+# 1. Copy loom.example.toml to loom.toml (or into a config/ dir with certs).
+# 2. Set LOOM_SENSOR_* in .env (do not commit .env).
+
+services:
+  loom:
+    build: .
+    image: loom:latest
+    container_name: loom
+    restart: unless-stopped
+    ports:
+      - "8443:8443"   # ingest (HTTPS)
+      - "9080:9080"   # management (health, metrics)
+    volumes:
+      # Option A: single config file
+      - ./loom.toml:/etc/loom/loom.toml:ro
+      # Option B: whole config dir (loom.toml + tls.crt, tls.key, etc.)
+      # - ./config:/etc/loom:ro
+      # Optional: MaxMind GeoIP/ASN DBs (set paths in loom.toml)
+      # - /path/to/GeoLite2-City.mmdb:/var/lib/loom/GeoLite2-City.mmdb:ro
+      # - /path/to/GeoLite2-ASN.mmdb:/var/lib/loom/GeoLite2-ASN.mmdb:ro
+    env_file:
+      - .env
+    # Or pass tokens explicitly (do not commit):
+    # environment:
+    #   - LOOM_SENSOR_spip01=${LOOM_SENSOR_spip01}
