@@ -92,6 +92,13 @@ func main() {
 		ClickHouseTable:      cfg.Output.ClickHouseTable,
 		ClickHouseUser:       cfg.Output.ClickHouseUser,
 		ClickHousePassword:   cfg.Output.ClickHousePassword,
+		ClickHouseFlushLog: func(rows int, err error) {
+			if err != nil {
+				log.Error().Err(err).Int("rows", rows).Msg("clickhouse flush failed")
+			} else {
+				log.Info().Int("rows", rows).Msg("clickhouse flush ok")
+			}
+		},
 	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("output")
@@ -101,6 +108,27 @@ func main() {
 			log.Warn().Err(err).Msg("output close")
 		}
 	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Periodic flush for ClickHouse so buffered events are sent and logged even when volume is low
+	if cfg.Output.Type == "clickhouse" {
+		go func() {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := out.Flush(); err != nil {
+						log.Error().Err(err).Msg("clickhouse periodic flush")
+					}
+				}
+			}
+		}()
+	}
 
 	var metricsHandler http.Handler
 	var ingestMetrics *ingest.Metrics
@@ -146,9 +174,6 @@ func main() {
 		ListenAddr:     cfg.Server.ListenAddress,
 		ManagementAddr: cfg.Server.ManagementListenAddress,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		if err := srv.Run(ctx); err != nil && err != http.ErrServerClosed {

@@ -17,8 +17,13 @@ import (
 // Writer emits one enriched ECS document per event to a configured destination.
 type Writer interface {
 	Write(event map[string]interface{}) error
+	Flush() error
 	Close() error
 }
+
+// FlushLogger is called after each ClickHouse flush (rows written, or err if failed).
+// Used for logging; may be nil.
+type FlushLogger func(rows int, err error)
 
 // WriterConfig holds all output backend options; only fields for the chosen type are used.
 type WriterConfig struct {
@@ -32,6 +37,8 @@ type WriterConfig struct {
 	ClickHouseTable      string
 	ClickHouseUser       string
 	ClickHousePassword   string
+	ClickHouseFlushLog   FlushLogger // optional: log each flush (success or failure)
+	SkipClickHousePing  bool        // if true, skip startup connection check (for tests)
 }
 
 // NewWriter creates a Writer from config. Type: "stdout", "elasticsearch", "clickhouse".
@@ -70,7 +77,12 @@ func NewWriter(cfg WriterConfig) (Writer, error) {
 			tbl = "loom_events"
 		}
 		client := &http.Client{Timeout: 30 * time.Second}
-		return newClickHouseWriter(client, cfg.ClickHouseURL, db, tbl, cfg.ClickHouseUser, cfg.ClickHousePassword), nil
+		if !cfg.SkipClickHousePing {
+			if err := pingClickHouse(client, cfg.ClickHouseURL, cfg.ClickHouseUser, cfg.ClickHousePassword); err != nil {
+				return nil, fmt.Errorf("clickhouse connection check failed: %w", err)
+			}
+		}
+		return newClickHouseWriter(client, cfg.ClickHouseURL, db, tbl, cfg.ClickHouseUser, cfg.ClickHousePassword, cfg.ClickHouseFlushLog), nil
 	default:
 		return nil, fmt.Errorf("unknown output type: %s", cfg.Type)
 	}
@@ -98,6 +110,12 @@ func (s *stdoutWriter) Write(event map[string]interface{}) error {
 }
 
 func (s *stdoutWriter) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Flush()
+}
+
+func (s *stdoutWriter) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.w.Flush()
@@ -169,34 +187,62 @@ func (e *esWriter) flushBuf() error {
 	return nil
 }
 
+func (e *esWriter) Flush() error {
+	return e.flushBuf()
+}
+
 func (e *esWriter) Close() error {
 	return e.flushBuf()
+}
+
+// pingClickHouse runs SELECT 1 against the server to verify connectivity and auth.
+func pingClickHouse(client *http.Client, baseURL, user, pass string) error {
+	url := strings.TrimSuffix(baseURL, "/") + "/?query=" + url.QueryEscape("SELECT 1")
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if user != "" || pass != "" {
+		req.SetBasicAuth(user, pass)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ping %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 // clickHouseWriter sends enriched events to ClickHouse via HTTP INSERT with JSONEachRow.
 // Table must have at least: event String (full ECS JSON). See docs for schema.
 type clickHouseWriter struct {
-	client *http.Client
-	url    string
-	db     string
-	table  string
-	user   string
-	pass   string
-	mu     sync.Mutex
-	buf    []map[string]interface{}
-	flush  int
+	client   *http.Client
+	url      string
+	db       string
+	table    string
+	user     string
+	pass     string
+	flushLog FlushLogger
+	mu       sync.Mutex
+	buf      []map[string]interface{}
+	flush    int
 }
 
-func newClickHouseWriter(client *http.Client, baseURL, database, table, user, pass string) *clickHouseWriter {
+func newClickHouseWriter(client *http.Client, baseURL, database, table, user, pass string, flushLog FlushLogger) *clickHouseWriter {
 	return &clickHouseWriter{
-		client: client,
-		url:    strings.TrimSuffix(baseURL, "/"),
-		db:     database,
-		table:  table,
-		user:   user,
-		pass:   pass,
-		buf:    make([]map[string]interface{}, 0, 100),
-		flush:  100,
+		client:   client,
+		url:      strings.TrimSuffix(baseURL, "/"),
+		db:       database,
+		table:    table,
+		user:     user,
+		pass:     pass,
+		flushLog: flushLog,
+		buf:      make([]map[string]interface{}, 0, 100),
+		flush:    100,
 	}
 }
 
@@ -212,6 +258,10 @@ func (c *clickHouseWriter) Write(event map[string]interface{}) error {
 		return c.flushBuf()
 	}
 	return nil
+}
+
+func (c *clickHouseWriter) Flush() error {
+	return c.flushBuf()
 }
 
 func (c *clickHouseWriter) flushBuf() error {
@@ -240,6 +290,9 @@ func (c *clickHouseWriter) flushBuf() error {
 	reqURL := c.url + "/?query=" + url.QueryEscape(query)
 	req, err := http.NewRequest(http.MethodPost, reqURL, &body)
 	if err != nil {
+		if c.flushLog != nil {
+			c.flushLog(len(batch), err)
+		}
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -248,12 +301,22 @@ func (c *clickHouseWriter) flushBuf() error {
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
+		if c.flushLog != nil {
+			c.flushLog(len(batch), err)
+		}
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("clickhouse insert %d: %s", resp.StatusCode, string(respBody))
+		err := fmt.Errorf("clickhouse insert %d: %s", resp.StatusCode, string(respBody))
+		if c.flushLog != nil {
+			c.flushLog(len(batch), err)
+		}
+		return err
+	}
+	if c.flushLog != nil {
+		c.flushLog(len(batch), nil)
 	}
 	return nil
 }

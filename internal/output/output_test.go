@@ -57,7 +57,7 @@ func TestNewWriter_ClickHouse_NoURL(t *testing.T) {
 }
 
 func TestNewWriter_ClickHouse_Defaults(t *testing.T) {
-	w, err := NewWriter(WriterConfig{Type: "clickhouse", ClickHouseURL: "http://localhost:8123"})
+	w, err := NewWriter(WriterConfig{Type: "clickhouse", ClickHouseURL: "http://localhost:8123", SkipClickHousePing: true})
 	if err != nil {
 		t.Fatal(err)
 	}

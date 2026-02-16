@@ -164,6 +164,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.Log.Info().Str("sensor_id", headerSensorID).Int("events", len(events)).Msg("ingest batch ok")
 	w.WriteHeader(http.StatusNoContent)
 }
 
