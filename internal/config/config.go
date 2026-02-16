@@ -109,6 +109,7 @@ func (c *Config) setDefaults() {
 	if c.Limits.MaxEventSizeBytes == 0 {
 		c.Limits.MaxEventSizeBytes = 128 * 1024
 	}
+	// PerSensorRPS: 0 or unset = default 50; -1 = disable rate limiting
 	if c.Limits.PerSensorRPS == 0 {
 		c.Limits.PerSensorRPS = 50
 	}

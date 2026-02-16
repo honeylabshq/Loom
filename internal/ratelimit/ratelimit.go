@@ -16,9 +16,13 @@ type PerSensorLimiter struct {
 }
 
 // NewPerSensorLimiter creates a limiter allowing rps requests per second per sensor.
+// If rps is 0, defaults to 50. If rps is negative (e.g. -1), rate limiting is disabled (Allow always returns true).
 func NewPerSensorLimiter(rps int) *PerSensorLimiter {
-	if rps <= 0 {
+	if rps == 0 {
 		rps = 50
+	}
+	if rps < 0 {
+		rps = 0
 	}
 	return &PerSensorLimiter{
 		rps:      rps,
@@ -32,6 +36,9 @@ func NewPerSensorLimiter(rps int) *PerSensorLimiter {
 func (p *PerSensorLimiter) Allow(sensorID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.rps <= 0 {
+		return true
+	}
 	now := p.nowFn().Unix()
 	tick, ok := p.lastTick[sensorID]
 	if !ok || tick != now {

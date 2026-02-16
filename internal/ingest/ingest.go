@@ -70,6 +70,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Per-sensor rate limit
 	if !h.RateLimiter.Allow(headerSensorID) {
+		h.Log.Warn().Str("sensor_id", headerSensorID).Msg("rate limit exceeded (429)")
 		if h.Metrics != nil {
 			h.Metrics.IncRequests(headerSensorID, http.StatusTooManyRequests)
 		}

@@ -40,6 +40,7 @@ management_listen_address = ":9080"
 max_body_size_bytes = 2097152
 max_events_per_batch = 500
 max_event_size_bytes = 131072
+# Requests per second per sensor (ingest POSTs). Default 50; use higher (e.g. 200) if sensors flush often or many share one id; use -1 to disable.
 per_sensor_rps = 50
 
 # ------------------------------------------------------------------------------

@@ -64,3 +64,12 @@ func TestNewPerSensorLimiter_ZeroRPS(t *testing.T) {
 		t.Errorf("zero rps should default to 50, got %d", l.rps)
 	}
 }
+
+func TestNewPerSensorLimiter_NegativeRPS_NoLimit(t *testing.T) {
+	l := NewPerSensorLimiter(-1)
+	for i := 0; i < 100; i++ {
+		if !l.Allow("s") {
+			t.Fatalf("with rps=-1, request %d should be allowed", i+1)
+		}
+	}
+}
