@@ -36,11 +36,13 @@ func (s *Server) Run(ctx context.Context) error {
 	ingestRouter.Post("/", s.IngestHandler.ServeHTTP)
 
 	ingestSrv := &http.Server{
-		Addr:         s.ListenAddr,
-		Handler:      ingestRouter,
-		TLSConfig:    s.tlsConfig(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:              s.ListenAddr,
+		Handler:            ingestRouter,
+		TLSConfig:          s.tlsConfig(),
+		ReadTimeout:        30 * time.Second,
+		ReadHeaderTimeout:  10 * time.Second,
+		WriteTimeout:       60 * time.Second,
+		IdleTimeout:        120 * time.Second,
 	}
 
 	if s.ManagementAddr != "" {
@@ -52,17 +54,21 @@ func (s *Server) Run(ctx context.Context) error {
 			mgmt.Handle("/metrics", s.MetricsHandler)
 		}
 		mgmtSrv := &http.Server{
-			Addr:         s.ManagementAddr,
-			Handler:      mgmt,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
+			Addr:              s.ManagementAddr,
+			Handler:           mgmt,
+			ReadTimeout:       5 * time.Second,
+			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      5 * time.Second,
+			IdleTimeout:       30 * time.Second,
 		}
 		go func() {
 			s.Logger.Info().Str("addr", s.ManagementAddr).Msg("management server listening")
 			_ = mgmtSrv.ListenAndServe()
 		}()
 		defer func() {
-			_ = mgmtSrv.Shutdown(context.Background())
+			mgmtCtx, mgmtCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer mgmtCancel()
+			_ = mgmtSrv.Shutdown(mgmtCtx)
 		}()
 	}
 
@@ -78,7 +84,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := ingestSrv.Shutdown(shutdownCtx); err != nil {
 			s.Logger.Warn().Err(err).Msg("ingest server shutdown")

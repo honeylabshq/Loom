@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewWriter_Stdout(t *testing.T) {
-	w, err := NewWriter("stdout", "", "", "", "")
+	w, err := NewWriter(WriterConfig{Type: "stdout"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,21 +25,39 @@ func TestNewWriter_Stdout(t *testing.T) {
 }
 
 func TestNewWriter_UnknownType(t *testing.T) {
-	_, err := NewWriter("unknown", "", "", "", "")
+	_, err := NewWriter(WriterConfig{Type: "unknown"})
 	if err == nil {
 		t.Fatal("expected error for unknown type")
 	}
 }
 
 func TestNewWriter_Elasticsearch_NoURL(t *testing.T) {
-	_, err := NewWriter("elasticsearch", "", "", "", "")
+	_, err := NewWriter(WriterConfig{Type: "elasticsearch"})
 	if err == nil {
 		t.Fatal("expected error when elasticsearch_url is empty")
 	}
 }
 
 func TestNewWriter_Elasticsearch_DefaultIndex(t *testing.T) {
-	w, err := NewWriter("elasticsearch", "http://localhost:9200", "", "", "")
+	w, err := NewWriter(WriterConfig{Type: "elasticsearch", ElasticsearchURL: "http://localhost:9200"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w == nil {
+		t.Fatal("writer is nil")
+	}
+	_ = w.Close()
+}
+
+func TestNewWriter_ClickHouse_NoURL(t *testing.T) {
+	_, err := NewWriter(WriterConfig{Type: "clickhouse"})
+	if err == nil {
+		t.Fatal("expected error when clickhouse_url is empty")
+	}
+}
+
+func TestNewWriter_ClickHouse_Defaults(t *testing.T) {
+	w, err := NewWriter(WriterConfig{Type: "clickhouse", ClickHouseURL: "http://localhost:8123"})
 	if err != nil {
 		t.Fatal(err)
 	}

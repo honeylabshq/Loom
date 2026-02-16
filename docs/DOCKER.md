@@ -18,6 +18,7 @@ Everything Loom needs at runtime is supplied from outside the image:
 | Tokens     | Environment: `LOOM_SENSOR_<sensor_id>=<token>` or mount a token file. |
 | TLS certs  | Mount a directory that contains `tls.crt` and `tls.key` where `loom.toml` points (e.g. `/etc/loom/`). |
 | GeoIP/ASN  | Optional: mount `.mmdb` files at the paths set in `loom.toml` (e.g. `/var/lib/loom/`). |
+| ClickHouse | Set `output.type = "clickhouse"` and `clickhouse_url` (and optional database/table); use `LOOM_CLICKHOUSE_USER` / `LOOM_CLICKHOUSE_PASSWORD` in env if required. |
 
 ### Without TLS (e.g. local dev)
 
@@ -95,12 +96,13 @@ Health check:
 curl -s http://localhost:9080/health
 ```
 
-## Security
+## Security and production
 
 - **Non-root:** The container runs as user `loom` (UID 1000). Ensure mounted config and certs are readable by that user (e.g. `chmod 644` on the host, or bind-mount from a directory owned by UID 1000).
 - **No secrets in image:** Tokens and credentials come only from environment or mounted files at runtime.
-- **Read-only config:** Mount `loom.toml` (and certs) with `:ro` so the process cannot modify them.
-- **Minimal image:** Based on Alpine; only the binary and ca-certificates. No shell required for normal run (add one for debugging if needed with `docker run -it ... sh` by overriding entrypoint).
+- **Read-only config:** Mount `loom.toml` and certs with `:ro` so the process cannot modify them.
+- **Minimal image:** Based on Alpine; only the binary and ca-certificates. No shell required for normal run (override entrypoint with `sh` for debugging if needed).
+- **TLS:** When `server.tls = true`, Loom validates at startup that cert and key files exist and are readable; use a config dir mount so the container sees both `loom.toml` and the cert files.
 
 ## Ports
 

@@ -75,19 +75,32 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("enricher")
 	}
-	defer enricher.Close()
+	defer func() {
+		if err := enricher.Close(); err != nil {
+			log.Warn().Err(err).Msg("enricher close")
+		}
+	}()
 
-	out, err := output.NewWriter(
-		cfg.Output.Type,
-		cfg.Output.ElasticsearchURL,
-		cfg.Output.ElasticsearchIndex,
-		cfg.Output.ElasticsearchUser,
-		cfg.Output.ElasticsearchPass,
-	)
+	out, err := output.NewWriter(output.WriterConfig{
+		Type:                 cfg.Output.Type,
+		ElasticsearchURL:     cfg.Output.ElasticsearchURL,
+		ElasticsearchIndex:   cfg.Output.ElasticsearchIndex,
+		ElasticsearchUser:    cfg.Output.ElasticsearchUser,
+		ElasticsearchPass:    cfg.Output.ElasticsearchPass,
+		ClickHouseURL:        cfg.Output.ClickHouseURL,
+		ClickHouseDatabase:   cfg.Output.ClickHouseDatabase,
+		ClickHouseTable:      cfg.Output.ClickHouseTable,
+		ClickHouseUser:       cfg.Output.ClickHouseUser,
+		ClickHousePassword:   cfg.Output.ClickHousePassword,
+	})
 	if err != nil {
 		log.Fatal().Err(err).Msg("output")
 	}
-	defer out.Close()
+	defer func() {
+		if err := out.Close(); err != nil {
+			log.Warn().Err(err).Msg("output close")
+		}
+	}()
 
 	var metricsHandler http.Handler
 	var ingestMetrics *ingest.Metrics

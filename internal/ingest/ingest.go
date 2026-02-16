@@ -82,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, h.MaxBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		if err.Error() == "http: request body too large" {
+		if strings.Contains(err.Error(), "request body too large") {
 			if h.Metrics != nil {
 				h.Metrics.IncRequests(headerSensorID, http.StatusRequestEntityTooLarge)
 			}

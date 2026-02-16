@@ -31,11 +31,11 @@ This guide walks through deploying **one Loom instance** and **one Spip sensor**
            v
   +------------------+
   |  Loom            |  Validates auth, enriches (ASN, GEO, optional DNS),
-  |  - loom.toml     |  outputs one ECS doc per event (stdout, file, or Elasticsearch).
+  |  - loom.toml     |  outputs one ECS doc per event (stdout, ClickHouse, Elasticsearch, etc.).
   +------------------+
            |
            v
-  [ Stdout / Elasticsearch / SIEM ]
+  [ Stdout / ClickHouse / Elasticsearch / SIEM ]
 ```
 
 - **Spip** runs once per sensor. It opens a TCP listen port, captures traffic, and for each connection emits an ECS-shaped event. If Loom is enabled, it batches those events and POSTs them to the Loom URL.
@@ -163,9 +163,9 @@ Terminal 2 — start Spip:
 
 ---
 
-## 5. Option B: Production-style setup (TLS, optional enrichment)
+## 5. Option B: Production-style setup (bare metal, TLS, optional enrichment)
 
-This section assumes you want TLS on Loom, optional GeoIP/ASN enrichment, and either stdout or Elasticsearch as output.
+This section is for running **Loom on bare metal** (not Docker): TLS on the ingest API so Spip can send over HTTPS, optional GeoIP/ASN enrichment, and output to stdout, ClickHouse, or Elasticsearch.
 
 ### 5.1 TLS certificate for Loom
 
@@ -210,6 +210,12 @@ enabled = false
 
 [output]
 type = "stdout"
+# Or ClickHouse:
+# type = "clickhouse"
+# clickhouse_url = "http://localhost:8123"
+# clickhouse_database = "default"
+# clickhouse_table = "loom_events"
+# (set LOOM_CLICKHOUSE_USER / LOOM_CLICKHOUSE_PASSWORD in env if required)
 # Or Elasticsearch:
 # type = "elasticsearch"
 # elasticsearch_url = "https://localhost:9200"
@@ -267,7 +273,42 @@ Replace `LOOM_HOST` with the hostname or IP that Spip uses to reach Loom (e.g. `
 3. In Loom’s `[enrichment]`, set `geoip_db_path` and `asn_db_path`.  
 4. Restart Loom. Enriched events will include `source.geo.*` and `source.as.*` when the DBs contain data for the source IP.
 
-### 5.5 Start order and firewall
+### 5.5 Output to ClickHouse
+
+To send enriched events to [ClickHouse](https://clickhouse.com/):
+
+1. **Create the table** (one column `event` storing the full ECS JSON):
+
+   ```sql
+   CREATE TABLE loom_events (event String) ENGINE = MergeTree ORDER BY tuple();
+   ```
+
+   Or with a timestamp for partitioning and TTL:
+
+   ```sql
+   CREATE TABLE loom_events (
+     event String,
+     _ts DateTime64(3) DEFAULT now64(3)
+   ) ENGINE = MergeTree() ORDER BY _ts;
+   ```
+
+   Loom sends each enriched event as a single JSON string in the `event` column via HTTP `INSERT ... FORMAT JSONEachRow`.
+
+2. **Configure Loom** in `loom.toml`:
+
+   ```toml
+   [output]
+   type = "clickhouse"
+   clickhouse_url = "http://localhost:8123"
+   clickhouse_database = "default"
+   clickhouse_table = "loom_events"
+   ```
+
+   If ClickHouse requires auth, set `LOOM_CLICKHOUSE_USER` and `LOOM_CLICKHOUSE_PASSWORD` in the environment (or use `clickhouse_user` / `clickhouse_password` in config; prefer env for secrets).
+
+3. Restart Loom. Events from Spip will be enriched and written to ClickHouse. Query with `SELECT * FROM loom_events` or use ClickHouse JSON functions on `event`.
+
+### 5.6 Start order and firewall
 
 1. Start **Loom** first (with token env or token file in place).  
 2. Start **Spip**.  
@@ -320,6 +361,7 @@ If Loom is unreachable or returns an error, Spip logs to stderr (e.g. “loom: �
 | Spip: connection refused / timeout | Loom not running; wrong host/port in `loom.url`; firewall blocking Loom’s ingest port. |
 | Loom: “server: tls enabled but cert_file or key_file missing” | Either set `tls = false` (dev) or set both `cert_file` and `key_file` to valid paths. |
 | No enriched fields (ASN/GEO) | Enrichment is optional. To get them, configure `enrichment.geoip_db_path` and `enrichment.asn_db_path` and ensure the DBs are present and readable. |
+| ClickHouse insert errors (401, 500, connection refused) | Check `clickhouse_url` is reachable; set `LOOM_CLICKHOUSE_USER` / `LOOM_CLICKHOUSE_PASSWORD` if auth is required; ensure the table exists with at least column `event String`. |
 
 ---
 
@@ -343,3 +385,14 @@ Single-sensor checklist:
 5. **Spip:** Set `url` to Loom’s ingest base URL (including port and, if you like, path like `/ingest`).
 
 After that, start Loom, then Spip, and verify with health checks and a test connection to Spip.
+
+---
+
+## 8. Production deployment recap
+
+- **TLS:** Use valid certificates for ingest; Loom validates at startup that `cert_file` and `key_file` exist and are readable when `tls = true`.
+- **Secrets:** Tokens and output credentials (ClickHouse, Elasticsearch) via environment or restricted files only; never in config or logs.
+- **Process:** Run as a dedicated non-root user; restrict file and network permissions.
+- **Observability:** Enable `observability.metrics_enabled` and expose the management port for `/health`, `/ready`, and `/metrics`; use structured JSON logging and avoid logging request bodies or tokens.
+- **Scaling:** Ingest is stateless; run multiple instances behind a load balancer if needed; per-instance caches (e.g. DNS) are not shared.
+- **Resources:** Reserve sufficient memory for MaxMind DBs and in-process caches when enrichment is enabled; CPU is typically low unless event volume is very high.

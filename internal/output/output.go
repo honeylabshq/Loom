@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -19,31 +20,59 @@ type Writer interface {
 	Close() error
 }
 
-// NewWriter creates a Writer from type and config. type: "stdout", "elasticsearch".
-func NewWriter(typ, esURL, esIndex, esUser, esPass string) (Writer, error) {
-	switch typ {
+// WriterConfig holds all output backend options; only fields for the chosen type are used.
+type WriterConfig struct {
+	Type                 string
+	ElasticsearchURL     string
+	ElasticsearchIndex   string
+	ElasticsearchUser    string
+	ElasticsearchPass    string
+	ClickHouseURL        string
+	ClickHouseDatabase   string
+	ClickHouseTable      string
+	ClickHouseUser       string
+	ClickHousePassword   string
+}
+
+// NewWriter creates a Writer from config. Type: "stdout", "elasticsearch", "clickhouse".
+func NewWriter(cfg WriterConfig) (Writer, error) {
+	switch cfg.Type {
 	case "stdout":
 		return &stdoutWriter{w: bufio.NewWriter(os.Stdout)}, nil
 	case "elasticsearch":
-		if esURL == "" {
+		if cfg.ElasticsearchURL == "" {
 			return nil, fmt.Errorf("elasticsearch_url required")
 		}
-		idx := esIndex
+		idx := cfg.ElasticsearchIndex
 		if idx == "" {
 			idx = "loom-events"
 		}
 		client := &http.Client{Timeout: 30 * time.Second}
 		return &esWriter{
 			client: client,
-			url:    strings.TrimSuffix(esURL, "/") + "/_bulk",
+			url:    strings.TrimSuffix(cfg.ElasticsearchURL, "/") + "/_bulk",
 			index:  idx,
-			user:   esUser,
-			pass:   esPass,
+			user:   cfg.ElasticsearchUser,
+			pass:   cfg.ElasticsearchPass,
 			buf:    make([]map[string]interface{}, 0, 100),
 			flush:  100,
 		}, nil
+	case "clickhouse":
+		if cfg.ClickHouseURL == "" {
+			return nil, fmt.Errorf("clickhouse_url required")
+		}
+		db := cfg.ClickHouseDatabase
+		if db == "" {
+			db = "default"
+		}
+		tbl := cfg.ClickHouseTable
+		if tbl == "" {
+			tbl = "loom_events"
+		}
+		client := &http.Client{Timeout: 30 * time.Second}
+		return newClickHouseWriter(client, cfg.ClickHouseURL, db, tbl, cfg.ClickHouseUser, cfg.ClickHousePassword), nil
 	default:
-		return nil, fmt.Errorf("unknown output type: %s", typ)
+		return nil, fmt.Errorf("unknown output type: %s", cfg.Type)
 	}
 }
 
@@ -53,6 +82,9 @@ type stdoutWriter struct {
 }
 
 func (s *stdoutWriter) Write(event map[string]interface{}) error {
+	if event == nil {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := json.Marshal(event)
@@ -83,6 +115,9 @@ type esWriter struct {
 }
 
 func (e *esWriter) Write(event map[string]interface{}) error {
+	if event == nil {
+		return nil
+	}
 	e.mu.Lock()
 	e.buf = append(e.buf, event)
 	shouldFlush := len(e.buf) >= e.flush
@@ -136,4 +171,93 @@ func (e *esWriter) flushBuf() error {
 
 func (e *esWriter) Close() error {
 	return e.flushBuf()
+}
+
+// clickHouseWriter sends enriched events to ClickHouse via HTTP INSERT with JSONEachRow.
+// Table must have at least: event String (full ECS JSON). See docs for schema.
+type clickHouseWriter struct {
+	client *http.Client
+	url    string
+	db     string
+	table  string
+	user   string
+	pass   string
+	mu     sync.Mutex
+	buf    []map[string]interface{}
+	flush  int
+}
+
+func newClickHouseWriter(client *http.Client, baseURL, database, table, user, pass string) *clickHouseWriter {
+	return &clickHouseWriter{
+		client: client,
+		url:    strings.TrimSuffix(baseURL, "/"),
+		db:     database,
+		table:  table,
+		user:   user,
+		pass:   pass,
+		buf:    make([]map[string]interface{}, 0, 100),
+		flush:  100,
+	}
+}
+
+func (c *clickHouseWriter) Write(event map[string]interface{}) error {
+	if event == nil {
+		return nil
+	}
+	c.mu.Lock()
+	c.buf = append(c.buf, event)
+	shouldFlush := len(c.buf) >= c.flush
+	c.mu.Unlock()
+	if shouldFlush {
+		return c.flushBuf()
+	}
+	return nil
+}
+
+func (c *clickHouseWriter) flushBuf() error {
+	c.mu.Lock()
+	if len(c.buf) == 0 {
+		c.mu.Unlock()
+		return nil
+	}
+	batch := c.buf
+	c.buf = make([]map[string]interface{}, 0, c.flush)
+	c.mu.Unlock()
+
+	var body bytes.Buffer
+	for _, ev := range batch {
+		eventJSON, err := json.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		row := map[string]string{"event": string(eventJSON)}
+		rowJSON, _ := json.Marshal(row)
+		body.Write(rowJSON)
+		body.WriteByte('\n')
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s.%s (event) FORMAT JSONEachRow", c.db, c.table)
+	reqURL := c.url + "/?query=" + url.QueryEscape(query)
+	req, err := http.NewRequest(http.MethodPost, reqURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.user != "" || c.pass != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("clickhouse insert %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func (c *clickHouseWriter) Close() error {
+	return c.flushBuf()
 }

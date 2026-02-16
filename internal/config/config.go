@@ -55,13 +55,18 @@ type DNSConfig struct {
 }
 
 type OutputConfig struct {
-	Type                string   `toml:"type"`
+	Type                 string   `toml:"type"`
 	ElasticsearchURL     string   `toml:"elasticsearch_url"`
 	ElasticsearchIndex   string   `toml:"elasticsearch_index"`
 	ElasticsearchUser    string   `toml:"elasticsearch_user"`
 	ElasticsearchPass    string   `toml:"elasticsearch_pass"`
-	KafkaBrokers        []string `toml:"kafka_brokers"`
-	KafkaTopic          string   `toml:"kafka_topic"`
+	ClickHouseURL        string   `toml:"clickhouse_url"`
+	ClickHouseDatabase   string   `toml:"clickhouse_database"`
+	ClickHouseTable      string   `toml:"clickhouse_table"`
+	ClickHouseUser       string   `toml:"clickhouse_user"`
+	ClickHousePassword   string   `toml:"clickhouse_password"`
+	KafkaBrokers         []string `toml:"kafka_brokers"`
+	KafkaTopic           string   `toml:"kafka_topic"`
 }
 
 type LoggingConfig struct {
@@ -161,12 +166,26 @@ func (c *Config) applyEnv() error {
 	if p := os.Getenv("LOOM_ELASTICSEARCH_PASS"); p != "" {
 		c.Output.ElasticsearchPass = p
 	}
+	if u := os.Getenv("LOOM_CLICKHOUSE_USER"); u != "" {
+		c.Output.ClickHouseUser = u
+	}
+	if p := os.Getenv("LOOM_CLICKHOUSE_PASSWORD"); p != "" {
+		c.Output.ClickHousePassword = p
+	}
 	return nil
 }
 
 func (c *Config) validate() error {
-	if c.Server.TLS && (c.Server.CertFile == "" || c.Server.KeyFile == "") {
-		return fmt.Errorf("server: tls enabled but cert_file or key_file missing")
+	if c.Server.TLS {
+		if c.Server.CertFile == "" || c.Server.KeyFile == "" {
+			return fmt.Errorf("server: tls enabled but cert_file or key_file missing")
+		}
+		if _, err := os.Stat(c.Server.CertFile); err != nil {
+			return fmt.Errorf("server: cert_file %q not readable: %w", c.Server.CertFile, err)
+		}
+		if _, err := os.Stat(c.Server.KeyFile); err != nil {
+			return fmt.Errorf("server: key_file %q not readable: %w", c.Server.KeyFile, err)
+		}
 	}
 	if len(c.Auth.Tokens) == 0 {
 		return fmt.Errorf("auth: no tokens configured (use token_file or LOOM_SENSOR_* env)")
@@ -182,11 +201,14 @@ func (c *Config) validate() error {
 	if c.Output.Type == "" {
 		c.Output.Type = "stdout"
 	}
-	if c.Output.Type != "stdout" && c.Output.Type != "elasticsearch" && c.Output.Type != "kafka" {
+	if c.Output.Type != "stdout" && c.Output.Type != "elasticsearch" && c.Output.Type != "kafka" && c.Output.Type != "clickhouse" {
 		return fmt.Errorf("output: unknown type %q", c.Output.Type)
 	}
 	if c.Output.Type == "elasticsearch" && c.Output.ElasticsearchURL == "" {
 		return fmt.Errorf("output: elasticsearch_url required when type=elasticsearch")
+	}
+	if c.Output.Type == "clickhouse" && c.Output.ClickHouseURL == "" {
+		return fmt.Errorf("output: clickhouse_url required when type=clickhouse")
 	}
 	return nil
 }

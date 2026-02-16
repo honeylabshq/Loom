@@ -80,3 +80,15 @@ func TestValidate_NoTokens(t *testing.T) {
 		t.Fatal("expected validation error when no tokens")
 	}
 }
+
+func TestValidate_TLSRequiresReadableCertFiles(t *testing.T) {
+	c := &Config{}
+	c.setDefaults()
+	c.Server.TLS = true
+	c.Server.CertFile = "/nonexistent/cert.pem"
+	c.Server.KeyFile = "/nonexistent/key.pem"
+	c.Auth.Tokens = map[string]string{"tk": "s1"}
+	if err := c.validate(); err == nil {
+		t.Fatal("expected validation error when cert or key file not readable")
+	}
+}

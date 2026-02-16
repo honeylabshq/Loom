@@ -37,6 +37,12 @@ type = "stdout"
 # elasticsearch_url = "https://localhost:9200"
 # elasticsearch_index = "loom-events"
 # Set LOOM_ELASTICSEARCH_USER and LOOM_ELASTICSEARCH_PASS in env
+#
+# type = "clickhouse"
+# clickhouse_url = "http://localhost:8123"
+# clickhouse_database = "default"
+# clickhouse_table = "loom_events"
+# Set LOOM_CLICKHOUSE_USER and LOOM_CLICKHOUSE_PASSWORD in env if required
 
 [logging]
 level = "info"
