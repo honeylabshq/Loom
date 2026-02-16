@@ -1,0 +1,22 @@
+# Binaries and build artifacts
+/loom
+loom
+cmd/loom/loom
+
+# Config with secrets (use loom.example.toml as template)
+loom.toml
+.env
+
+# Go
+vendor/
+*.exe
+*.test
+*.out
+coverage.out
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store

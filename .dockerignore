@@ -1,0 +1,12 @@
+.git
+.gitignore
+*.md
+docs/
+loom.toml
+/loom
+*.test
+.idea
+.vscode
+.DS_Store
+coverage.out
+*.exe

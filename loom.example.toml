@@ -1,0 +1,87 @@
+# Loom example configuration (v1)
+# Copy to loom.toml and adjust. Do not put secrets in this file.
+# Auth: set LOOM_SENSOR_<sensor_id>=<token> in the environment, or use auth.token_file.
+
+# ------------------------------------------------------------------------------
+# Server
+# ------------------------------------------------------------------------------
+[server]
+listen_address = ":8443"
+tls = true
+cert_file = "/etc/loom/tls.crt"
+key_file = "/etc/loom/tls.key"
+# Health and metrics (no TLS)
+management_listen_address = ":9080"
+
+# For local development: set tls = false and leave cert_file/key_file empty.
+
+# ------------------------------------------------------------------------------
+# Auth (required) — one token per sensor (e.g. per Spip instance)
+# ------------------------------------------------------------------------------
+[auth]
+# Option A: token file, one line per "token,sensor_id"
+# token_file = "/etc/loom/tokens.txt"
+#   Example contents for three sensors:
+#     <token-for-spip-001>,spip-001
+#     <token-for-spip-002>,spip-002
+#     <token-for-spip-003>,spip-003
+#
+# Option B: environment variables (recommended)
+#   Example for three sensors (set in shell or systemd Environment/EnvironmentFile):
+#   LOOM_SENSOR_spip_001 = "secret-token-for-sensor-1"
+#   LOOM_SENSOR_spip_002 = "secret-token-for-sensor-2"
+#   LOOM_SENSOR_spip_003 = "secret-token-for-sensor-3"
+#   (Use underscores in the env key; Loom maps them to sensor_id with hyphens, e.g. spip-001.)
+
+# ------------------------------------------------------------------------------
+# Limits
+# ------------------------------------------------------------------------------
+[limits]
+max_body_size_bytes = 2097152
+max_events_per_batch = 500
+max_event_size_bytes = 131072
+per_sensor_rps = 50
+
+# ------------------------------------------------------------------------------
+# Enrichment (optional)
+# ------------------------------------------------------------------------------
+[enrichment]
+# MaxMind GeoLite2: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+# Omit or leave empty to run without ASN/GEO.
+geoip_db_path = "/var/lib/loom/GeoLite2-City.mmdb"
+asn_db_path = "/var/lib/loom/GeoLite2-ASN.mmdb"
+
+[enrichment.dns]
+enabled = false
+resolver_addr = "127.0.0.1:53"
+cache_ttl_seconds = 300
+max_qps = 10
+
+# ------------------------------------------------------------------------------
+# Output (choose one)
+# ------------------------------------------------------------------------------
+[output]
+# Development: print one JSON line per event to stdout
+type = "stdout"
+
+# ClickHouse: table must have a column named "event" (String). Loom inserts one
+# JSON string per row. Set LOOM_CLICKHOUSE_USER and LOOM_CLICKHOUSE_PASSWORD in env.
+# type = "clickhouse"
+# clickhouse_url = "http://localhost:8123"
+# clickhouse_database = "default"
+# clickhouse_table = "ecs_raw"
+
+# Elasticsearch: set LOOM_ELASTICSEARCH_USER and LOOM_ELASTICSEARCH_PASS in env.
+# type = "elasticsearch"
+# elasticsearch_url = "https://localhost:9200"
+# elasticsearch_index = "loom-events"
+
+# ------------------------------------------------------------------------------
+# Logging and observability
+# ------------------------------------------------------------------------------
+[logging]
+level = "info"
+format = "json"
+
+[observability]
+metrics_enabled = true
