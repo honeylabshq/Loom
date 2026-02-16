@@ -30,7 +30,7 @@ type Server struct {
 func (s *Server) Run(ctx context.Context) error {
 	ingestRouter := chi.NewRouter()
 	ingestRouter.Use(middleware.RealIP, middleware.Recoverer, requestLogger(s.Logger))
-	// Ingest: support multiple paths for Spip compatibility (Spip uses full URL; examples use /ingest, e2e uses base URL POST /)
+	// Ingest: multiple paths accepted (/api/v1/ingest, /ingest, /) for client flexibility
 	ingestRouter.Post("/api/v1/ingest", s.IngestHandler.ServeHTTP)
 	ingestRouter.Post("/ingest", s.IngestHandler.ServeHTTP)
 	ingestRouter.Post("/", s.IngestHandler.ServeHTTP)

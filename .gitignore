@@ -1,5 +1,7 @@
-# Binary
+# Binaries and build artifacts
 /loom
+loom
+cmd/loom/loom
 
 # Config with secrets (use loom.example.toml as template)
 loom.toml

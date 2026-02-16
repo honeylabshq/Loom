@@ -1,10 +1,24 @@
 # Loom
 
-Loom is an enrichment service that receives batched ECS log events from [Spip](https://github.com/StefanGrimminck/Spip-Go) honeypot sensors over HTTPS, enriches each event with ASN, GEO, and optional DNS using local or cached data, and outputs enriched ECS events to stdout, [ClickHouse](https://clickhouse.com/), Elasticsearch, or similar.
+**Loom** is an enrichment service for ECS-formatted log events. It receives batched events over HTTPS (e.g. from honeypot sensors), enriches each event with ASN, GEO, and optional DNS using local or cached data, and writes the enriched ECS to stdout, [ClickHouse](https://clickhouse.com/), or Elasticsearch.
 
-Configuration is TOML-based; secrets are supplied via environment or token file, not the CLI.
+**Version:** 1.x
 
-For a step-by-step deployment guide (one Loom + one Spip), see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md).
+## What it does
+
+1. **Ingest** — Accepts `POST` requests with a JSON array of ECS events. Validates a Bearer token and optional sensor id header; applies per-sensor rate limits.
+2. **Enrich** — For each event with a source IP: looks up ASN and GeoIP (MaxMind GeoLite2) and optionally reverse DNS (PTR), then adds `source.as`, `source.geo`, and `source.domain` to the event. Preserves all other fields.
+3. **Output** — Writes one enriched event per destination: stdout (one JSON line per event), ClickHouse (HTTP INSERT), or Elasticsearch (bulk API). ClickHouse is checked at startup; each flush is logged.
+
+Configuration is TOML-based. Secrets (tokens, DB credentials) are supplied via environment or token file, not the config file or CLI.
+
+## How it works
+
+- **Clients** (e.g. [Spip](https://github.com/StefanGrimminck/Spip-Go) sensors) send batches of ECS events to Loom’s ingest endpoint. Each request must include `Authorization: Bearer <token>` and optionally `X-Spip-ID: <sensor_id>` (or equivalent); the token maps to a single sensor id.
+- **Loom** validates the token, rate-limits per sensor, parses the JSON array, enriches each event (if MaxMind DBs and/or DNS are configured), and writes to the configured output. For ClickHouse, events are buffered and flushed every 100 events or every 10 seconds; each flush is logged.
+- **Output** can be stdout (for debugging or piping), ClickHouse (table must have an `event` String column), or Elasticsearch. Health and Prometheus metrics are exposed on a separate management port.
+
+For a step-by-step deployment guide (one Loom + one sensor), see [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md).
 
 ## Build
 
@@ -16,29 +30,25 @@ go build -o loom ./cmd/loom
 
 ## Quick start
 
-1. **Configuration**
-
-   Copy the example config and set authentication. Loom does not accept secrets on the CLI.
+1. **Copy and edit config**
 
    ```bash
    cp loom.example.toml loom.toml
    ```
 
-   Provide tokens via environment (one token per sensor):
+   Loom does not accept secrets on the CLI. Provide tokens via environment (one per sensor):
 
    ```bash
-   export LOOM_SENSOR_vps-frankfurt-01="your-secret-token"
+   export LOOM_SENSOR_my-sensor="your-secret-token"
    ```
 
-   Or use a token file: set `auth.token_file` to a path with one line per `token,sensor_id`.
+   Or use `auth.token_file` with one line per `token,sensor_id`.
 
-2. **Development (no TLS)**
+2. **Development (no TLS)**  
+   In `loom.toml` set `server.tls = false` and leave `cert_file` / `key_file` empty. Use `output.type = "stdout"`.
 
-   In `loom.toml`, set `server.tls = false` and leave `cert_file` and `key_file` empty. Use `output.type = "stdout"`.
-
-3. **Enrichment (optional)**
-
-   For ASN and GEO, download [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) and set `enrichment.geoip_db_path` and `enrichment.asn_db_path`. If omitted, Loom still runs and forwards events without ASN/GEO.
+3. **Enrichment (optional)**  
+   Download [MaxMind GeoLite2](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) (City + ASN) and set `enrichment.geoip_db_path` and `enrichment.asn_db_path`. If omitted, Loom still runs and forwards events without ASN/GEO.
 
 4. **Run**
 
@@ -48,11 +58,9 @@ go build -o loom ./cmd/loom
 
 ## Ingest API
 
-- **Endpoints:** `POST /api/v1/ingest`, `POST /ingest`, or `POST /` (all equivalent; multiple paths for Spip compatibility).
+- **Endpoints:** `POST /api/v1/ingest`, `POST /ingest`, or `POST /` (all equivalent).
 - **Transport:** HTTPS in production (TLS 1.2+); HTTP only for local development.
-- **Headers:**
-  - `Authorization: Bearer <token>` — required; constant-time validation.
-  - `X-Spip-ID` — sensor identifier; must match the token’s sensor.
+- **Headers:** `Authorization: Bearer <token>` (required); `X-Spip-ID` (sensor id; must match the token’s sensor).
 - **Body:** JSON array of ECS event objects.
 
 Response codes: 200/204 success; 400 invalid request; 401 unauthorized; 413 payload or batch too large; 429 rate limit; 500/503 server errors.
@@ -63,18 +71,18 @@ Response codes: 200/204 success; 400 invalid request; 401 unauthorized; 413 payl
 - **Readiness:** `GET /ready` → 200 when the service can accept ingest and use output; 503 otherwise.
 - **Metrics:** `GET /metrics` (Prometheus) when `observability.metrics_enabled = true`.
 
-Health and metrics use `server.management_listen_address` (e.g. `:9080`) when set.
+Management port is set by `server.management_listen_address` (e.g. `:9080`).
 
 ## Configuration summary
 
 | Area         | Key options |
 |-------------|-------------|
 | **Server**  | `listen_address`, `tls`, `cert_file`, `key_file`, `management_listen_address` |
-| **Auth**    | `token_file` or env `LOOM_SENSOR_<id>=<token>` (one token per sensor) |
-| **Limits**  | `max_body_size_bytes`, `max_events_per_batch`, `max_event_size_bytes`, `per_sensor_rps` |
-| **Enrichment** | `geoip_db_path`, `asn_db_path`, `dns.*` |
-| **Output**  | `type`: `stdout`, `clickhouse`, or `elasticsearch`; for ClickHouse set `clickhouse_url`, optional database/table and `LOOM_CLICKHOUSE_USER` / `LOOM_CLICKHOUSE_PASSWORD`; for ES set URL/index and env credentials |
-| **Logging** | `level`, `format` (json or console) |
+| **Auth**     | `token_file` or env `LOOM_SENSOR_<sensor_id>=<token>` (one token per sensor) |
+| **Limits**   | `max_body_size_bytes`, `max_events_per_batch`, `max_event_size_bytes`, `per_sensor_rps` |
+| **Enrichment** | `geoip_db_path`, `asn_db_path`, `enrichment.dns.*` |
+| **Output**   | `type`: `stdout`, `clickhouse`, or `elasticsearch`; ClickHouse/ES options and env credentials (see example). |
+| **Logging**  | `level`, `format` (json or console) |
 
 ## Deployment
 
@@ -84,19 +92,17 @@ Health and metrics use `server.management_listen_address` (e.g. `:9080`) when se
 
 ## Production checklist
 
-Before going live:
-
 | Item | Action |
 |------|--------|
-| **TLS** | Set `server.tls = true` and valid `cert_file` / `key_file`; config validation will fail at startup if files are missing or unreadable. |
-| **Secrets** | Provide tokens via environment (`LOOM_SENSOR_*`) or a restricted `auth.token_file`; never in config or CLI. |
-| **Limits** | Keep `max_body_size_bytes`, `max_events_per_batch`, and `per_sensor_rps` within spec; tune for your load. |
-| **Health** | Expose `management_listen_address` and use `/health` and `/ready` for orchestration and load balancers. |
-| **Metrics** | Enable `observability.metrics_enabled` and scrape `/metrics` (Prometheus); no sensitive data in labels. |
-| **Logging** | Use `format = "json"` and a log level of `info` or `warn`; ensure logs (and rotation) do not capture request bodies or tokens. |
-| **Output** | For ClickHouse/Elasticsearch, use TLS in the URL where possible and credentials from env. |
+| **TLS** | Set `server.tls = true` and valid `cert_file` / `key_file`; startup fails if files are missing or unreadable. |
+| **Secrets** | Use env `LOOM_SENSOR_*` or restricted `auth.token_file`; never in config or CLI. |
+| **Limits** | Tune `max_body_size_bytes`, `max_events_per_batch`, `per_sensor_rps` for your load. |
+| **Health** | Expose `management_listen_address` and use `/health` and `/ready` for orchestration. |
+| **Metrics** | Enable `observability.metrics_enabled` and scrape `/metrics`. |
+| **Logging** | Use `format = "json"` and level `info` or `warn`; avoid logging request bodies or tokens. |
+| **Output** | For ClickHouse/Elasticsearch, use TLS where possible and credentials from env. |
 
-**Resources:** A single instance typically needs modest CPU and memory; allow enough memory for MaxMind DBs and DNS cache if enrichment is enabled. See [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for full deployment and troubleshooting.
+See [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) for full deployment and troubleshooting.
 
 ## License
 

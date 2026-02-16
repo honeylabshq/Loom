@@ -154,7 +154,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Metrics.AddEvents(headerSensorID, len(events))
 	}
 
-	// Process (enrich + output) — may run async in real impl; we do sync for simplicity
+	// Process (enrich + output)
 	if err := h.ProcessBatch(headerSensorID, events); err != nil {
 		h.Log.Error().Err(err).Str("sensor_id", headerSensorID).Msg("process batch")
 		if h.Metrics != nil {
