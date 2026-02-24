@@ -92,3 +92,28 @@ func TestValidate_TLSRequiresReadableCertFiles(t *testing.T) {
 		t.Fatal("expected validation error when cert or key file not readable")
 	}
 }
+
+func TestValidate_OutboxRequiresClickHouse(t *testing.T) {
+	c := &Config{}
+	c.setDefaults()
+	c.Auth.Tokens = map[string]string{"tk": "s1"}
+	c.Output.Type = "stdout"
+	c.Output.Outbox.Enabled = true
+	if err := c.validate(); err == nil {
+		t.Fatal("expected validation error when outbox enabled without clickhouse output")
+	}
+}
+
+func TestSetDefaults_Outbox(t *testing.T) {
+	c := &Config{}
+	c.setDefaults()
+	if c.Output.Outbox.Dir == "" {
+		t.Fatal("outbox dir should have default")
+	}
+	if c.Output.Outbox.MaxBytes <= 0 {
+		t.Fatal("outbox max_bytes should be > 0 by default")
+	}
+	if c.Output.Outbox.FlushIntervalMS <= 0 {
+		t.Fatal("outbox flush interval should be > 0 by default")
+	}
+}

@@ -82,16 +82,24 @@ func main() {
 	}()
 
 	out, err := output.NewWriter(output.WriterConfig{
-		Type:                 cfg.Output.Type,
-		ElasticsearchURL:     cfg.Output.ElasticsearchURL,
-		ElasticsearchIndex:   cfg.Output.ElasticsearchIndex,
-		ElasticsearchUser:    cfg.Output.ElasticsearchUser,
-		ElasticsearchPass:    cfg.Output.ElasticsearchPass,
-		ClickHouseURL:        cfg.Output.ClickHouseURL,
-		ClickHouseDatabase:   cfg.Output.ClickHouseDatabase,
-		ClickHouseTable:      cfg.Output.ClickHouseTable,
-		ClickHouseUser:       cfg.Output.ClickHouseUser,
-		ClickHousePassword:   cfg.Output.ClickHousePassword,
+		Type:               cfg.Output.Type,
+		ElasticsearchURL:   cfg.Output.ElasticsearchURL,
+		ElasticsearchIndex: cfg.Output.ElasticsearchIndex,
+		ElasticsearchUser:  cfg.Output.ElasticsearchUser,
+		ElasticsearchPass:  cfg.Output.ElasticsearchPass,
+		ClickHouseURL:      cfg.Output.ClickHouseURL,
+		ClickHouseDatabase: cfg.Output.ClickHouseDatabase,
+		ClickHouseTable:    cfg.Output.ClickHouseTable,
+		ClickHouseUser:     cfg.Output.ClickHouseUser,
+		ClickHousePassword: cfg.Output.ClickHousePassword,
+		ClickHouseOutbox: output.OutboxConfig{
+			Enabled:         cfg.Output.Outbox.Enabled,
+			Dir:             cfg.Output.Outbox.Dir,
+			MaxBytes:        cfg.Output.Outbox.MaxBytes,
+			MaxBatchSize:    cfg.Output.Outbox.MaxBatchSize,
+			RetryBackoff:    time.Duration(cfg.Output.Outbox.RetryBackoffMS) * time.Millisecond,
+			RetryMaxBackoff: time.Duration(cfg.Output.Outbox.RetryMaxBackoffMS) * time.Millisecond,
+		},
 		ClickHouseFlushLog: func(rows int, err error) {
 			if err != nil {
 				log.Error().Err(err).Int("rows", rows).Msg("clickhouse flush failed")
@@ -114,8 +122,12 @@ func main() {
 
 	// Periodic flush for ClickHouse so buffered events are sent and logged even when volume is low
 	if cfg.Output.Type == "clickhouse" {
+		flushEvery := time.Duration(cfg.Output.Outbox.FlushIntervalMS) * time.Millisecond
+		if flushEvery <= 0 {
+			flushEvery = 10 * time.Second
+		}
 		go func() {
-			ticker := time.NewTicker(10 * time.Second)
+			ticker := time.NewTicker(flushEvery)
 			defer ticker.Stop()
 			for {
 				select {

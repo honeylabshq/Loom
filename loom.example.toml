@@ -71,6 +71,17 @@ type = "stdout"
 # clickhouse_url = "http://localhost:8123"
 # clickhouse_database = "default"
 # clickhouse_table = "ecs_raw"
+#
+# Optional local outbox (recommended for production):
+# If ClickHouse is unavailable, Loom will spool failed batches to disk and retry.
+# [output.outbox]
+# enabled = true
+# dir = "/var/lib/loom/outbox"
+# max_bytes = 268435456          # 256 MiB queue cap; oldest batches dropped first when full
+# flush_interval_ms = 10000      # retry/drain cadence
+# max_batch_size = 100           # NDJSON batch size per outbox file
+# retry_backoff_ms = 1000
+# retry_max_backoff_ms = 30000
 
 # Elasticsearch: set LOOM_ELASTICSEARCH_USER and LOOM_ELASTICSEARCH_PASS in env.
 # type = "elasticsearch"

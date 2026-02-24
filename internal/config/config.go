@@ -21,10 +21,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	ListenAddress          string `toml:"listen_address"`
-	TLS                    bool   `toml:"tls"`
-	CertFile               string `toml:"cert_file"`
-	KeyFile                string `toml:"key_file"`
+	ListenAddress           string `toml:"listen_address"`
+	TLS                     bool   `toml:"tls"`
+	CertFile                string `toml:"cert_file"`
+	KeyFile                 string `toml:"key_file"`
 	ManagementListenAddress string `toml:"management_listen_address"`
 }
 
@@ -42,9 +42,9 @@ type LimitsConfig struct {
 }
 
 type EnrichmentConfig struct {
-	GeoIPDBPath string     `toml:"geoip_db_path"`
-	ASNDBPath   string     `toml:"asn_db_path"`
-	DNS         DNSConfig  `toml:"dns"`
+	GeoIPDBPath string    `toml:"geoip_db_path"`
+	ASNDBPath   string    `toml:"asn_db_path"`
+	DNS         DNSConfig `toml:"dns"`
 }
 
 type DNSConfig struct {
@@ -55,18 +55,29 @@ type DNSConfig struct {
 }
 
 type OutputConfig struct {
-	Type                 string   `toml:"type"`
-	ElasticsearchURL     string   `toml:"elasticsearch_url"`
-	ElasticsearchIndex   string   `toml:"elasticsearch_index"`
-	ElasticsearchUser    string   `toml:"elasticsearch_user"`
-	ElasticsearchPass    string   `toml:"elasticsearch_pass"`
-	ClickHouseURL        string   `toml:"clickhouse_url"`
-	ClickHouseDatabase   string   `toml:"clickhouse_database"`
-	ClickHouseTable      string   `toml:"clickhouse_table"`
-	ClickHouseUser       string   `toml:"clickhouse_user"`
-	ClickHousePassword   string   `toml:"clickhouse_password"`
-	KafkaBrokers         []string `toml:"kafka_brokers"`
-	KafkaTopic           string   `toml:"kafka_topic"`
+	Type               string       `toml:"type"`
+	ElasticsearchURL   string       `toml:"elasticsearch_url"`
+	ElasticsearchIndex string       `toml:"elasticsearch_index"`
+	ElasticsearchUser  string       `toml:"elasticsearch_user"`
+	ElasticsearchPass  string       `toml:"elasticsearch_pass"`
+	ClickHouseURL      string       `toml:"clickhouse_url"`
+	ClickHouseDatabase string       `toml:"clickhouse_database"`
+	ClickHouseTable    string       `toml:"clickhouse_table"`
+	ClickHouseUser     string       `toml:"clickhouse_user"`
+	ClickHousePassword string       `toml:"clickhouse_password"`
+	Outbox             OutboxConfig `toml:"outbox"`
+	KafkaBrokers       []string     `toml:"kafka_brokers"`
+	KafkaTopic         string       `toml:"kafka_topic"`
+}
+
+type OutboxConfig struct {
+	Enabled           bool   `toml:"enabled"`
+	Dir               string `toml:"dir"`
+	MaxBytes          int64  `toml:"max_bytes"`
+	FlushIntervalMS   int    `toml:"flush_interval_ms"`
+	MaxBatchSize      int    `toml:"max_batch_size"`
+	RetryBackoffMS    int    `toml:"retry_backoff_ms"`
+	RetryMaxBackoffMS int    `toml:"retry_max_backoff_ms"`
 }
 
 type LoggingConfig struct {
@@ -121,6 +132,24 @@ func (c *Config) setDefaults() {
 	}
 	if c.Auth.Tokens == nil {
 		c.Auth.Tokens = make(map[string]string)
+	}
+	if c.Output.Outbox.Dir == "" {
+		c.Output.Outbox.Dir = "/var/lib/loom/outbox"
+	}
+	if c.Output.Outbox.MaxBytes == 0 {
+		c.Output.Outbox.MaxBytes = 256 * 1024 * 1024 // 256 MiB
+	}
+	if c.Output.Outbox.FlushIntervalMS == 0 {
+		c.Output.Outbox.FlushIntervalMS = 10000
+	}
+	if c.Output.Outbox.MaxBatchSize == 0 {
+		c.Output.Outbox.MaxBatchSize = 100
+	}
+	if c.Output.Outbox.RetryBackoffMS == 0 {
+		c.Output.Outbox.RetryBackoffMS = 1000
+	}
+	if c.Output.Outbox.RetryMaxBackoffMS == 0 {
+		c.Output.Outbox.RetryMaxBackoffMS = 30000
 	}
 }
 
@@ -210,6 +239,21 @@ func (c *Config) validate() error {
 	}
 	if c.Output.Type == "clickhouse" && c.Output.ClickHouseURL == "" {
 		return fmt.Errorf("output: clickhouse_url required when type=clickhouse")
+	}
+	if c.Output.Outbox.Enabled && c.Output.Type != "clickhouse" {
+		return fmt.Errorf("output: outbox requires type=clickhouse")
+	}
+	if c.Output.Outbox.MaxBytes < 0 {
+		return fmt.Errorf("output.outbox: max_bytes must be >= 0")
+	}
+	if c.Output.Outbox.FlushIntervalMS < 0 {
+		return fmt.Errorf("output.outbox: flush_interval_ms must be >= 0")
+	}
+	if c.Output.Outbox.MaxBatchSize < 0 {
+		return fmt.Errorf("output.outbox: max_batch_size must be >= 0")
+	}
+	if c.Output.Outbox.RetryBackoffMS < 0 || c.Output.Outbox.RetryMaxBackoffMS < 0 {
+		return fmt.Errorf("output.outbox: retry backoff values must be >= 0")
 	}
 	return nil
 }

@@ -25,20 +25,31 @@ type Writer interface {
 // Used for logging; may be nil.
 type FlushLogger func(rows int, err error)
 
+// OutboxConfig controls local disk spooling for failed ClickHouse writes.
+type OutboxConfig struct {
+	Enabled         bool
+	Dir             string
+	MaxBytes        int64
+	MaxBatchSize    int
+	RetryBackoff    time.Duration
+	RetryMaxBackoff time.Duration
+}
+
 // WriterConfig holds all output backend options; only fields for the chosen type are used.
 type WriterConfig struct {
-	Type                 string
-	ElasticsearchURL     string
-	ElasticsearchIndex   string
-	ElasticsearchUser    string
-	ElasticsearchPass    string
-	ClickHouseURL        string
-	ClickHouseDatabase   string
-	ClickHouseTable      string
-	ClickHouseUser       string
-	ClickHousePassword   string
-	ClickHouseFlushLog   FlushLogger // optional: log each flush (success or failure)
-	SkipClickHousePing  bool        // if true, skip startup connection check (for tests)
+	Type               string
+	ElasticsearchURL   string
+	ElasticsearchIndex string
+	ElasticsearchUser  string
+	ElasticsearchPass  string
+	ClickHouseURL      string
+	ClickHouseDatabase string
+	ClickHouseTable    string
+	ClickHouseUser     string
+	ClickHousePassword string
+	ClickHouseFlushLog FlushLogger // optional: log each flush (success or failure)
+	ClickHouseOutbox   OutboxConfig
+	SkipClickHousePing bool // if true, skip startup connection check (for tests)
 }
 
 // NewWriter creates a Writer from config. Type: "stdout", "elasticsearch", "clickhouse".
@@ -82,7 +93,16 @@ func NewWriter(cfg WriterConfig) (Writer, error) {
 				return nil, fmt.Errorf("clickhouse connection check failed: %w", err)
 			}
 		}
-		return newClickHouseWriter(client, cfg.ClickHouseURL, db, tbl, cfg.ClickHouseUser, cfg.ClickHousePassword, cfg.ClickHouseFlushLog), nil
+		return newClickHouseWriter(
+			client,
+			cfg.ClickHouseURL,
+			db,
+			tbl,
+			cfg.ClickHouseUser,
+			cfg.ClickHousePassword,
+			cfg.ClickHouseFlushLog,
+			cfg.ClickHouseOutbox,
+		)
 	default:
 		return nil, fmt.Errorf("unknown output type: %s", cfg.Type)
 	}
@@ -122,9 +142,9 @@ func (s *stdoutWriter) Flush() error {
 }
 
 type esWriter struct {
-	client   *http.Client
-	url      string
-	index    string
+	client *http.Client
+	url    string
+	index  string
 	user   string
 	pass   string
 	mu     sync.Mutex
@@ -227,23 +247,61 @@ type clickHouseWriter struct {
 	user     string
 	pass     string
 	flushLog FlushLogger
-	mu       sync.Mutex
-	buf      []map[string]interface{}
-	flush    int
+	outbox   *diskOutbox
+
+	mu              sync.Mutex
+	buf             []map[string]interface{}
+	flush           int
+	retryBackoff    time.Duration
+	retryMax        time.Duration
+	nextRetryAt     time.Time
+	currentBackoff  time.Duration
+	outboxBatchSize int
 }
 
-func newClickHouseWriter(client *http.Client, baseURL, database, table, user, pass string, flushLog FlushLogger) *clickHouseWriter {
-	return &clickHouseWriter{
-		client:   client,
-		url:      strings.TrimSuffix(baseURL, "/"),
-		db:       database,
-		table:    table,
-		user:     user,
-		pass:     pass,
-		flushLog: flushLog,
-		buf:      make([]map[string]interface{}, 0, 100),
-		flush:    100,
+func newClickHouseWriter(
+	client *http.Client,
+	baseURL,
+	database,
+	table,
+	user,
+	pass string,
+	flushLog FlushLogger,
+	outboxCfg OutboxConfig,
+) (*clickHouseWriter, error) {
+	w := &clickHouseWriter{
+		client:          client,
+		url:             strings.TrimSuffix(baseURL, "/"),
+		db:              database,
+		table:           table,
+		user:            user,
+		pass:            pass,
+		flushLog:        flushLog,
+		buf:             make([]map[string]interface{}, 0, 100),
+		flush:           100,
+		retryBackoff:    outboxCfg.RetryBackoff,
+		retryMax:        outboxCfg.RetryMaxBackoff,
+		currentBackoff:  outboxCfg.RetryBackoff,
+		outboxBatchSize: outboxCfg.MaxBatchSize,
 	}
+	if w.retryBackoff <= 0 {
+		w.retryBackoff = time.Second
+		w.currentBackoff = time.Second
+	}
+	if w.retryMax <= 0 {
+		w.retryMax = 30 * time.Second
+	}
+	if w.outboxBatchSize <= 0 {
+		w.outboxBatchSize = w.flush
+	}
+	if outboxCfg.Enabled {
+		ob, err := newDiskOutbox(outboxCfg.Dir, outboxCfg.MaxBytes)
+		if err != nil {
+			return nil, err
+		}
+		w.outbox = ob
+	}
+	return w, nil
 }
 
 func (c *clickHouseWriter) Write(event map[string]interface{}) error {
@@ -255,13 +313,16 @@ func (c *clickHouseWriter) Write(event map[string]interface{}) error {
 	shouldFlush := len(c.buf) >= c.flush
 	c.mu.Unlock()
 	if shouldFlush {
-		return c.flushBuf()
+		return c.Flush()
 	}
 	return nil
 }
 
 func (c *clickHouseWriter) Flush() error {
-	return c.flushBuf()
+	if err := c.flushBuf(); err != nil {
+		return err
+	}
+	return c.drainOutbox()
 }
 
 func (c *clickHouseWriter) flushBuf() error {
@@ -273,43 +334,28 @@ func (c *clickHouseWriter) flushBuf() error {
 	batch := c.buf
 	c.buf = make([]map[string]interface{}, 0, c.flush)
 	c.mu.Unlock()
-
-	var body bytes.Buffer
-	for _, ev := range batch {
-		eventJSON, err := json.Marshal(ev)
-		if err != nil {
-			return err
+	if err := c.insertBatch(batch); err != nil {
+		if c.outbox != nil {
+			dropped := 0
+			for _, chunk := range splitBatches(batch, c.outboxBatchSize) {
+				d, qerr := c.outbox.enqueue(chunk)
+				dropped += d
+				if qerr != nil {
+					if c.flushLog != nil {
+						c.flushLog(len(batch), fmt.Errorf("clickhouse insert failed and outbox enqueue failed: %w (insert err: %v)", qerr, err))
+					}
+					return qerr
+				}
+			}
+			if c.flushLog != nil {
+				files, bytes, _ := c.outbox.stats()
+				c.flushLog(
+					len(batch),
+					fmt.Errorf("clickhouse insert failed; queued to outbox (dropped_oldest_events=%d queue_files=%d queue_bytes=%d): %w", dropped, files, bytes, err),
+				)
+			}
+			return nil
 		}
-		row := map[string]string{"event": string(eventJSON)}
-		rowJSON, _ := json.Marshal(row)
-		body.Write(rowJSON)
-		body.WriteByte('\n')
-	}
-
-	query := fmt.Sprintf("INSERT INTO %s.%s (event) FORMAT JSONEachRow", c.db, c.table)
-	reqURL := c.url + "/?query=" + url.QueryEscape(query)
-	req, err := http.NewRequest(http.MethodPost, reqURL, &body)
-	if err != nil {
-		if c.flushLog != nil {
-			c.flushLog(len(batch), err)
-		}
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.user != "" || c.pass != "" {
-		req.SetBasicAuth(c.user, c.pass)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		if c.flushLog != nil {
-			c.flushLog(len(batch), err)
-		}
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		err := fmt.Errorf("clickhouse insert %d: %s", resp.StatusCode, string(respBody))
 		if c.flushLog != nil {
 			c.flushLog(len(batch), err)
 		}
@@ -321,6 +367,101 @@ func (c *clickHouseWriter) flushBuf() error {
 	return nil
 }
 
+func (c *clickHouseWriter) insertBatch(batch []map[string]interface{}) error {
+	var body bytes.Buffer
+	for _, ev := range batch {
+		eventJSON, err := json.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		row := map[string]string{"event": string(eventJSON)}
+		rowJSON, _ := json.Marshal(row)
+		body.Write(rowJSON)
+		body.WriteByte('\n')
+	}
+	query := fmt.Sprintf("INSERT INTO %s.%s (event) FORMAT JSONEachRow", c.db, c.table)
+	reqURL := c.url + "/?query=" + url.QueryEscape(query)
+	req, err := http.NewRequest(http.MethodPost, reqURL, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.user != "" || c.pass != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("clickhouse insert %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func (c *clickHouseWriter) drainOutbox() error {
+	if c.outbox == nil {
+		return nil
+	}
+	if !c.nextRetryAt.IsZero() && time.Now().Before(c.nextRetryAt) {
+		return nil
+	}
+	for i := 0; i < 10; i++ {
+		meta, ok := c.outbox.oldestMeta()
+		if !ok {
+			c.currentBackoff = c.retryBackoff
+			c.nextRetryAt = time.Time{}
+			return nil
+		}
+		batch, err := readBatchFile(meta.path)
+		if err != nil {
+			_ = c.outbox.removeByName(meta.name)
+			if c.flushLog != nil {
+				c.flushLog(meta.events, fmt.Errorf("outbox file unreadable, dropped batch %q: %w", meta.name, err))
+			}
+			continue
+		}
+		if err := c.insertBatch(batch); err != nil {
+			if c.flushLog != nil {
+				c.flushLog(len(batch), fmt.Errorf("outbox drain failed: %w", err))
+			}
+			c.nextRetryAt = time.Now().Add(c.currentBackoff)
+			c.currentBackoff *= 2
+			if c.currentBackoff > c.retryMax {
+				c.currentBackoff = c.retryMax
+			}
+			return nil
+		}
+		if err := c.outbox.removeByName(meta.name); err != nil && c.flushLog != nil {
+			c.flushLog(len(batch), fmt.Errorf("outbox drain delete failed: %w", err))
+		}
+		if c.flushLog != nil {
+			c.flushLog(len(batch), nil)
+		}
+	}
+	return nil
+}
+
+func splitBatches(batch []map[string]interface{}, size int) [][]map[string]interface{} {
+	if size <= 0 || len(batch) <= size {
+		return [][]map[string]interface{}{batch}
+	}
+	out := make([][]map[string]interface{}, 0, (len(batch)+size-1)/size)
+	for i := 0; i < len(batch); i += size {
+		j := i + size
+		if j > len(batch) {
+			j = len(batch)
+		}
+		out = append(out, batch[i:j])
+	}
+	return out
+}
+
 func (c *clickHouseWriter) Close() error {
-	return c.flushBuf()
+	if err := c.flushBuf(); err != nil {
+		return err
+	}
+	return c.drainOutbox()
 }
