@@ -33,6 +33,17 @@ func NewDNSEnricher(cacheTTL time.Duration, maxQPS int) *DNSEnricher {
 	}
 }
 
+const dnsCacheEvictThreshold = 5000
+
+// evictExpiredLocked removes all expired entries. Must be called with d.mu held.
+func (d *DNSEnricher) evictExpiredLocked(now time.Time) {
+	for k, e := range d.cache {
+		if now.After(e.exp) {
+			delete(d.cache, k)
+		}
+	}
+}
+
 // LookupPTR returns the PTR name for ip, from cache or lookup, rate-limited. Empty string if none.
 func (d *DNSEnricher) LookupPTR(ip net.IP) string {
 	key := ip.String()
@@ -42,6 +53,9 @@ func (d *DNSEnricher) LookupPTR(ip net.IP) string {
 		return e.name
 	}
 	now := time.Now()
+	if len(d.cache) > dnsCacheEvictThreshold {
+		d.evictExpiredLocked(now)
+	}
 	if now.Sub(d.qpsTicker) >= time.Second {
 		d.qpsTicker = now
 		d.qpsCount = 0

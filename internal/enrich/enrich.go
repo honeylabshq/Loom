@@ -3,6 +3,7 @@ package enrich
 import (
 	"net"
 	"sync"
+	"time"
 
 	"github.com/oschwald/geoip2-golang"
 	"github.com/rs/zerolog"
@@ -56,10 +57,14 @@ func (e *Enricher) Close() error {
 }
 
 // EnrichEvent enriches one ECS-like map. Preserves all existing keys; adds source.as.*, source.geo.*, source.domain.
+// Injects @timestamp (RFC3339Nano, UTC) if not already present.
 // Missing source.ip is non-fatal: enrichment is skipped and the event is preserved.
 func (e *Enricher) EnrichEvent(event map[string]interface{}) {
 	if event == nil {
 		return
+	}
+	if _, ok := event["@timestamp"]; !ok {
+		event["@timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	source, _ := event["source"].(map[string]interface{})
 	if source == nil {
@@ -127,6 +132,9 @@ func (e *Enricher) EnrichEvent(event map[string]interface{}) {
 func setGeo(geo map[string]interface{}, city *geoip2.City) {
 	if len(city.Country.IsoCode) == 2 {
 		geo["country_iso_code"] = string(city.Country.IsoCode)
+	}
+	if name, ok := city.Country.Names["en"]; ok && name != "" {
+		geo["country_name"] = name
 	}
 	if city.Subdivisions != nil && len(city.Subdivisions) > 0 {
 		geo["region_name"] = city.Subdivisions[0].Names["en"]

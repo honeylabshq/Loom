@@ -28,7 +28,7 @@ func NewPerSensorLimiter(rps int) *PerSensorLimiter {
 		rps:      rps,
 		lastTick: make(map[string]int64),
 		count:    make(map[string]int),
-		nowFn:    time.Now().UTC,
+		nowFn:    func() time.Time { return time.Now().UTC() },
 	}
 }
 
