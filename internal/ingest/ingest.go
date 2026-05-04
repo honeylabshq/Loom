@@ -47,8 +47,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.respondErr(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(authz, "Bearer"))
-	token = strings.TrimPrefix(token, "bearer ")
+	// Lowercase prefix already verified above; slice off "bearer " (7 bytes) regardless of case.
+	token := strings.TrimSpace(authz[len("bearer "):])
 	sensorID := h.Validator.Validate(token)
 	if sensorID == "" {
 		if h.Metrics != nil {
