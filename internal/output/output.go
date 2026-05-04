@@ -103,6 +103,8 @@ func NewWriter(cfg WriterConfig) (Writer, error) {
 			cfg.ClickHouseFlushLog,
 			cfg.ClickHouseOutbox,
 		)
+	case "kafka":
+		return nil, fmt.Errorf("kafka output is not yet implemented")
 	default:
 		return nil, fmt.Errorf("unknown output type: %s", cfg.Type)
 	}
