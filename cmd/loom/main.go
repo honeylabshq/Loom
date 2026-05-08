@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,6 +49,11 @@ func main() {
 		log = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 	} else {
 		log = zerolog.New(os.Stderr).With().Timestamp().Logger()
+	}
+
+	if cfg.Server.ManagementListenAddress != "" && strings.HasPrefix(cfg.Server.ManagementListenAddress, ":") {
+		log.Warn().Str("addr", cfg.Server.ManagementListenAddress).
+			Msg("management server bound to all interfaces; consider 127.0.0.1:<port> to avoid public exposure")
 	}
 
 	validator := auth.NewValidator(cfg.Auth.Tokens)
@@ -169,22 +174,18 @@ func main() {
 		Metrics: ingestMetrics,
 	}
 
-	var tlsConfig *tls.Config
-	if cfg.Server.TLS && (cfg.Server.CertFile != "" && cfg.Server.KeyFile != "") {
-		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-
 	srv := &server.Server{
 		IngestHandler:  ingestHandler,
 		EnricherReady:  enricher.Ready,
 		OutputReady:    func() bool { return true },
 		MetricsHandler: metricsHandler,
 		Logger:         log,
-		TLSConfig:      tlsConfig,
 		CertFile:       cfg.Server.CertFile,
 		KeyFile:        cfg.Server.KeyFile,
 		ListenAddr:     cfg.Server.ListenAddress,
 		ManagementAddr: cfg.Server.ManagementListenAddress,
+		IPRateLimit:    cfg.Limits.GlobalIPRPS,
+		MaxConnections: cfg.Server.MaxConnections,
 	}
 
 	go func() {

@@ -26,6 +26,8 @@ type ServerConfig struct {
 	CertFile                string `toml:"cert_file"`
 	KeyFile                 string `toml:"key_file"`
 	ManagementListenAddress string `toml:"management_listen_address"`
+	// MaxConnections caps concurrent ingest TCP connections; 0 = unlimited.
+	MaxConnections int `toml:"max_connections"`
 }
 
 type AuthConfig struct {
@@ -39,6 +41,9 @@ type LimitsConfig struct {
 	MaxEventSizeBytes  int64 `toml:"max_event_size_bytes"`
 	PerSensorRPS       int   `toml:"per_sensor_rps"`
 	PerSensorEventsRPS int   `toml:"per_sensor_events_rps"`
+	// GlobalIPRPS is the per-IP request limit per second before auth. 0 = default
+	// (100 rps), -1 = disabled.
+	GlobalIPRPS int `toml:"global_ip_rps"`
 }
 
 type EnrichmentConfig struct {
@@ -123,6 +128,10 @@ func (c *Config) setDefaults() {
 	// PerSensorRPS: 0 or unset = default 50; -1 = disable rate limiting
 	if c.Limits.PerSensorRPS == 0 {
 		c.Limits.PerSensorRPS = 50
+	}
+	// GlobalIPRPS: 0 or unset = default 100; -1 = disable IP rate limiting
+	if c.Limits.GlobalIPRPS == 0 {
+		c.Limits.GlobalIPRPS = 100
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -220,9 +229,13 @@ func (c *Config) validate() error {
 	if len(c.Auth.Tokens) == 0 {
 		return fmt.Errorf("auth: no tokens configured (use token_file or LOOM_SENSOR_* env)")
 	}
+	const minTokenLen = 32
 	// One token per sensor: each token must map to exactly one sensor
 	seenSensor := make(map[string]string)
 	for token, sensorID := range c.Auth.Tokens {
+		if len(token) < minTokenLen {
+			return fmt.Errorf("auth: token for sensor %q is too short (minimum %d bytes); use a cryptographically random token", sensorID, minTokenLen)
+		}
 		if prev, ok := seenSensor[sensorID]; ok && prev != token {
 			return fmt.Errorf("auth: sensor %q has multiple tokens", sensorID)
 		}

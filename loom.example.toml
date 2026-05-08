@@ -10,8 +10,10 @@ listen_address = ":8443"
 tls = true
 cert_file = "/etc/loom/tls.crt"
 key_file = "/etc/loom/tls.key"
-# Health and metrics (no TLS)
-management_listen_address = ":9080"
+# Health and metrics (no TLS) — bind to loopback; never expose this to the internet
+management_listen_address = "127.0.0.1:9080"
+# Cap concurrent ingest connections to limit resource exhaustion under flood; 0 = unlimited
+max_connections = 1000
 
 # For local development: set tls = false and leave cert_file/key_file empty.
 
@@ -42,6 +44,8 @@ max_events_per_batch = 500
 max_event_size_bytes = 131072
 # Requests per second per sensor (ingest POSTs). Default 50; use higher (e.g. 200) if sensors flush often or many share one id; use -1 to disable.
 per_sensor_rps = 50
+# Per-IP request rate limit before auth (defends against credential-stuffing floods). Default 100; -1 to disable.
+global_ip_rps = 100
 
 # ------------------------------------------------------------------------------
 # Enrichment (optional)
