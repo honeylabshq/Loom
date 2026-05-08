@@ -59,7 +59,7 @@ go build -o loom ./cmd/loom
 ## Ingest API
 
 - **Endpoints:** `POST /api/v1/ingest`, `POST /ingest`, or `POST /` (all equivalent).
-- **Transport:** HTTPS in production (TLS 1.2+); HTTP only for local development.
+- **Transport:** HTTPS in production (TLS 1.3+); HTTP only for local development.
 - **Headers:** `Authorization: Bearer <token>` (required); `X-Spip-ID` (sensor id; must match the token’s sensor).
 - **Body:** JSON array of ECS event objects.
 
@@ -71,15 +71,15 @@ Response codes: 200/204 success; 400 invalid request; 401 unauthorized; 413 payl
 - **Readiness:** `GET /ready` → 200 when the service can accept ingest and use output; 503 otherwise.
 - **Metrics:** `GET /metrics` (Prometheus) when `observability.metrics_enabled = true`.
 
-Management port is set by `server.management_listen_address` (e.g. `:9080`).
+Management port is set by `server.management_listen_address`. Bind it to loopback (`127.0.0.1:9080`) — it has no authentication and must not be exposed to the internet. Loom logs a warning at startup if the address is bound to all interfaces.
 
 ## Configuration summary
 
 | Area         | Key options |
 |-------------|-------------|
-| **Server**  | `listen_address`, `tls`, `cert_file`, `key_file`, `management_listen_address` |
-| **Auth**     | `token_file` or env `LOOM_SENSOR_<sensor_id>=<token>` (one token per sensor) |
-| **Limits**   | `max_body_size_bytes`, `max_events_per_batch`, `max_event_size_bytes`, `per_sensor_rps` |
+| **Server**  | `listen_address`, `tls`, `cert_file`, `key_file`, `management_listen_address`, `max_connections` |
+| **Auth**     | `token_file` or env `LOOM_SENSOR_<sensor_id>=<token>` (one token per sensor; minimum 32 bytes) |
+| **Limits**   | `max_body_size_bytes`, `max_events_per_batch`, `max_event_size_bytes`, `per_sensor_rps`, `global_ip_rps` |
 | **Enrichment** | `geoip_db_path`, `asn_db_path`, `enrichment.dns.*` |
 | **Output**   | `type`: `stdout`, `clickhouse`, or `elasticsearch`; ClickHouse/ES options and env credentials (see example). For ClickHouse, optional `output.outbox.*` enables local disk spooling and retry on DB failures. |
 | **Logging**  | `level`, `format` (json or console) |
@@ -94,11 +94,14 @@ Management port is set by `server.management_listen_address` (e.g. `:9080`).
 
 | Item | Action |
 |------|--------|
-| **TLS** | Set `server.tls = true` and valid `cert_file` / `key_file`; startup fails if files are missing or unreadable. |
-| **Secrets** | Use env `LOOM_SENSOR_*` or restricted `auth.token_file`; never in config or CLI. |
+| **TLS** | Set `server.tls = true` and valid `cert_file` / `key_file`; startup fails if files are missing or unreadable. TLS 1.3 is the minimum; older clients are rejected. |
+| **Secrets** | Use env `LOOM_SENSOR_*` or restricted `auth.token_file`; never in config or CLI. Tokens must be at least 32 bytes; startup fails on shorter tokens. |
+| **IP rate limit** | `limits.global_ip_rps` (default 100) caps unauthenticated requests per IP per second before the token validator runs. Set to `-1` only for trusted private networks. |
+| **Connection cap** | Set `server.max_connections` (e.g. `1000`) to limit concurrent TCP connections and prevent resource exhaustion under floods. |
+| **Management port** | Bind `management_listen_address` to loopback (`127.0.0.1:9080`); it carries no auth and exposes sensor IDs via `/metrics`. |
 | **Limits** | Tune `max_body_size_bytes`, `max_events_per_batch`, `per_sensor_rps` for your load. |
-| **Health** | Expose `management_listen_address` and use `/health` and `/ready` for orchestration. |
-| **Metrics** | Enable `observability.metrics_enabled` and scrape `/metrics`. |
+| **Health** | Use `/health` and `/ready` for orchestration probes via the management port. |
+| **Metrics** | Enable `observability.metrics_enabled` and scrape `/metrics` from the management port only. |
 | **Logging** | Use `format = "json"` and level `info` or `warn`; avoid logging request bodies or tokens. |
 | **Output** | For ClickHouse/Elasticsearch, use TLS where possible and credentials from env. |
 | **Outbox** | For ClickHouse production, enable `output.outbox.enabled = true` with a persistent disk path (`output.outbox.dir`) and set queue limits (`max_bytes`). |
