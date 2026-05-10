@@ -39,10 +39,12 @@ go build -o loom ./cmd/loom
    Loom does not accept secrets on the CLI. Provide tokens via environment (one per sensor):
 
    ```bash
-   export LOOM_SENSOR_my-sensor="your-secret-token"
+   # Generate a token (minimum 32 bytes required)
+   openssl rand -hex 32
+   export LOOM_SENSOR_my-sensor="<token>"
    ```
 
-   Or use `auth.token_file` with one line per `token,sensor_id`.
+   Or use `auth.token_file` with one line per `token,sensor_id`. Startup fails if any token is shorter than 32 bytes.
 
 2. **Development (no TLS)**  
    In `loom.toml` set `server.tls = false` and leave `cert_file` / `key_file` empty. Use `output.type = "stdout"`.
