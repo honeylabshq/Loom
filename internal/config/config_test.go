@@ -25,8 +25,8 @@ type = "stdout"
 		t.Fatal(err)
 	}
 
-	// Provide token via env so validation passes
-	os.Setenv("LOOM_SENSOR_spip01", "test-token")
+	// Provide token via env so validation passes (must be >= 32 bytes)
+	os.Setenv("LOOM_SENSOR_spip01", "test-token-that-is-long-enough-0000")
 	defer os.Unsetenv("LOOM_SENSOR_spip01")
 
 	cfg, err := Load(cfgPath)
@@ -48,8 +48,8 @@ type = "stdout"
 	if len(cfg.Auth.Tokens) == 0 {
 		t.Error("expected tokens from LOOM_SENSOR_ env")
 	}
-	if cfg.Auth.Tokens["test-token"] != "spip01" {
-		t.Errorf("token should map to spip01, got %q", cfg.Auth.Tokens["test-token"])
+	if cfg.Auth.Tokens["test-token-that-is-long-enough-0000"] != "spip01" {
+		t.Errorf("token should map to spip01, got %q", cfg.Auth.Tokens["test-token-that-is-long-enough-0000"])
 	}
 }
 
@@ -87,7 +87,7 @@ func TestValidate_TLSRequiresReadableCertFiles(t *testing.T) {
 	c.Server.TLS = true
 	c.Server.CertFile = "/nonexistent/cert.pem"
 	c.Server.KeyFile = "/nonexistent/key.pem"
-	c.Auth.Tokens = map[string]string{"tk": "s1"}
+	c.Auth.Tokens = map[string]string{"token-that-is-long-enough-for-test-00": "s1"}
 	if err := c.validate(); err == nil {
 		t.Fatal("expected validation error when cert or key file not readable")
 	}
@@ -96,7 +96,7 @@ func TestValidate_TLSRequiresReadableCertFiles(t *testing.T) {
 func TestValidate_OutboxRequiresClickHouse(t *testing.T) {
 	c := &Config{}
 	c.setDefaults()
-	c.Auth.Tokens = map[string]string{"tk": "s1"}
+	c.Auth.Tokens = map[string]string{"token-that-is-long-enough-for-test-00": "s1"}
 	c.Output.Type = "stdout"
 	c.Output.Outbox.Enabled = true
 	if err := c.validate(); err == nil {
