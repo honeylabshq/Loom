@@ -2,6 +2,8 @@
 
 **Loom** is an enrichment service for ECS-formatted log events. It receives batched events over HTTPS (e.g. from honeypot sensors), enriches each event with ASN, GEO, and optional DNS using local or cached data, and writes the enriched ECS to stdout, [ClickHouse](https://clickhouse.com/), or Elasticsearch.
 
+Loom and [Spip](https://github.com/honeylabshq/Spip-Go) sensors together power [HoneyLabs](https://honeylabs.net), where the enriched events are freely queryable.
+
 **Version:** 1.x
 
 ## What it does
@@ -14,7 +16,7 @@ Configuration is TOML-based. Secrets (tokens, DB credentials) are supplied via e
 
 ## How it works
 
-- **Clients** (e.g. [Spip](https://github.com/StefanGrimminck/Spip-Go) sensors) send batches of ECS events to Loom’s ingest endpoint. Each request must include `Authorization: Bearer <token>` and optionally `X-Spip-ID: <sensor_id>` (or equivalent); the token maps to a single sensor id.
+- **Clients** (e.g. [Spip](https://github.com/honeylabshq/Spip-Go) sensors) send batches of ECS events to Loom’s ingest endpoint. Each request must include `Authorization: Bearer <token>` and optionally `X-Spip-ID: <sensor_id>` (or equivalent); the token maps to a single sensor id.
 - **Loom** validates the token, rate-limits per sensor, parses the JSON array, enriches each event (if MaxMind DBs and/or DNS are configured), and writes to the configured output. For ClickHouse, events are buffered and flushed every 100 events or every configured flush interval; each flush is logged. With outbox enabled, failed ClickHouse inserts are persisted to local disk and drained automatically.
 - **Output** can be stdout (for debugging or piping), ClickHouse (table must have an `event` String column), or Elasticsearch. Health and Prometheus metrics are exposed on a separate management port.
 
