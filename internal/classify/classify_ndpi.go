@@ -46,8 +46,15 @@ static void shim_classify(const unsigned char *payload, int plen,
     pkt[3] = (unsigned char)(l3len & 0xff);
     pkt[8] = 64;                        // TTL
     pkt[9] = 6;                         // protocol = TCP
-    pkt[12] = 10; pkt[13] = 0; pkt[14] = 0; pkt[15] = 1; // src 10.0.0.1
-    pkt[16] = 10; pkt[17] = 0; pkt[18] = 0; pkt[19] = 2; // dst 10.0.0.2
+    // Unique source IP per call. nDPI keeps an LRU flow cache keyed on the
+    // tuple; reusing the same fake IPs made it correlate unrelated events and
+    // return a cached label instead of inspecting the payload (e.g. an SMB
+    // packet coming back as "bittorrent"). A per-call counter in 100.x.x.x
+    // (carrier-grade NAT, no special addresses) guarantees an independent flow.
+    static unsigned int g_ctr = 0; // mutex-guarded by the Go caller
+    unsigned int c = g_ctr++;
+    pkt[12] = 100; pkt[13] = (c >> 16) & 0xff; pkt[14] = (c >> 8) & 0xff; pkt[15] = c & 0xff;
+    pkt[16] = 100; pkt[17] = 200; pkt[18] = 200; pkt[19] = 200; // fixed dst
 
     // TCP header at offset 20.
     pkt[20] = (unsigned char)((sport >> 8) & 0xff); pkt[21] = (unsigned char)(sport & 0xff);
@@ -63,17 +70,27 @@ static void shim_classify(const unsigned char *payload, int plen,
 
     ndpi_protocol proto =
         ndpi_detection_process_packet(g_mod, flow, pkt, (unsigned short)l3len, 0);
+    // Only finalise via giveup when the single packet wasn't already enough;
+    // calling it on an already-matched flow would reset the result. guess=0 so
+    // giveup never falls back to port/IP guessing.
     if (proto.app_protocol == NDPI_PROTOCOL_UNKNOWN &&
         proto.master_protocol == NDPI_PROTOCOL_UNKNOWN) {
         unsigned char guessed = 0;
-        proto = ndpi_detection_giveup(g_mod, flow, 1, &guessed);
+        proto = ndpi_detection_giveup(g_mod, flow, 0, &guessed);
     }
 
-    unsigned short id = proto.app_protocol;
-    if (id == NDPI_PROTOCOL_UNKNOWN) id = proto.master_protocol;
-    if (id != NDPI_PROTOCOL_UNKNOWN) {
-        char *name = ndpi_get_proto_name(g_mod, id);
-        if (name) { strncpy(out, name, out_sz - 1); out[out_sz - 1] = 0; }
+    // Keep DPI-based matches (DPI, and DPI_CACHE which some dissectors like
+    // BitTorrent legitimately use to confirm from payload hints). Reject
+    // MATCH_BY_PORT / MATCH_BY_IP: those are the "it's on port 3306 so probably
+    // mysql" guesses we're replacing. Per-call unique IPs (above) stop the
+    // generic flow cache from bleeding one event's label onto the next.
+    if (flow->confidence >= NDPI_CONFIDENCE_DPI_CACHE) {
+        unsigned short id = proto.app_protocol;
+        if (id == NDPI_PROTOCOL_UNKNOWN) id = proto.master_protocol;
+        if (id != NDPI_PROTOCOL_UNKNOWN) {
+            char *name = ndpi_get_proto_name(g_mod, id);
+            if (name) { strncpy(out, name, out_sz - 1); out[out_sz - 1] = 0; }
+        }
     }
 
     ndpi_free_flow(flow); // frees nDPI-internal allocations AND the flow block
