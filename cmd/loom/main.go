@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/StefanGrimminck/Loom/internal/auth"
+	"github.com/StefanGrimminck/Loom/internal/classify"
 	"github.com/StefanGrimminck/Loom/internal/config"
 	"github.com/StefanGrimminck/Loom/internal/enrich"
 	"github.com/StefanGrimminck/Loom/internal/ingest"
@@ -85,6 +86,17 @@ func main() {
 			log.Warn().Err(err).Msg("enricher close")
 		}
 	}()
+
+	// Application-protocol classifier (nDPI). Built into the binary only under
+	// the `ndpi` tag; otherwise this is a no-op and protocol labelling falls
+	// back to ClickHouse. A classifier init failure is non-fatal: we log and
+	// keep enriching everything else.
+	if clf, err := classify.New(); err != nil {
+		log.Warn().Err(err).Msg("protocol classifier unavailable; continuing without nDPI")
+	} else {
+		enricher.SetClassifier(clf)
+		log.Info().Msg("nDPI protocol classifier enabled")
+	}
 
 	out, err := output.NewWriter(output.WriterConfig{
 		Type:               cfg.Output.Type,

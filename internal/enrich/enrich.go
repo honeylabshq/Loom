@@ -1,21 +1,31 @@
 package enrich
 
 import (
+	"encoding/hex"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/StefanGrimminck/Loom/internal/classify"
 	"github.com/oschwald/geoip2-golang"
 	"github.com/rs/zerolog"
 )
 
-// Enricher adds ASN, GEO, and optionally DNS to ECS events.
+// Enricher adds ASN, GEO, optionally DNS, and optionally an application-protocol
+// label (nDPI) to ECS events.
 type Enricher struct {
-	geoDB   *geoip2.Reader
-	asnDB   *geoip2.Reader
-	dns     *DNSEnricher
-	log     zerolog.Logger
-	mu      sync.RWMutex
+	geoDB      *geoip2.Reader
+	asnDB      *geoip2.Reader
+	dns        *DNSEnricher
+	classifier classify.Classifier
+	log        zerolog.Logger
+	mu         sync.RWMutex
+}
+
+// SetClassifier attaches an application-protocol classifier. Safe to leave
+// unset (nil): classification is then skipped and the event is unchanged.
+func (e *Enricher) SetClassifier(c classify.Classifier) {
+	e.classifier = c
 }
 
 // NewEnricher opens MaxMind DBs and optional DNS enricher. geoPath and asnPath can be "" to skip.
@@ -127,6 +137,59 @@ func (e *Enricher) EnrichEvent(event map[string]interface{}) {
 			source["domain"] = name
 		}
 	}
+
+	// Application-protocol classification (nDPI). Fed the captured first
+	// payload (event.original_payload_hex, the clean hex copy, not the
+	// UTF-8-mangled event.summary) plus the ports. The result goes under a
+	// dedicated `ndpi.protocol` key so it never collides with the existing
+	// network.protocol semantics; ClickHouse prefers it and falls back to
+	// its own classifier when it's absent.
+	if e.classifier != nil {
+		if proto := e.classifyEvent(event, source); proto != "" {
+			ndpi, _ := event["ndpi"].(map[string]interface{})
+			if ndpi == nil {
+				ndpi = make(map[string]interface{})
+				event["ndpi"] = ndpi
+			}
+			ndpi["protocol"] = proto
+		}
+	}
+}
+
+// classifyEvent pulls the payload hex + ports out of an ECS event and runs the
+// classifier. Returns "" when there's nothing to classify or no match.
+func (e *Enricher) classifyEvent(event, source map[string]interface{}) string {
+	ev, _ := event["event"].(map[string]interface{})
+	if ev == nil {
+		return ""
+	}
+	hexStr, _ := ev["original_payload_hex"].(string)
+	if hexStr == "" {
+		return ""
+	}
+	payload, err := hex.DecodeString(hexStr)
+	if err != nil || len(payload) == 0 {
+		return ""
+	}
+	srcPort := portOf(source["port"])
+	var dstPort uint16
+	if dst, ok := event["destination"].(map[string]interface{}); ok {
+		dstPort = portOf(dst["port"])
+	}
+	return e.classifier.Classify(payload, srcPort, dstPort)
+}
+
+// portOf coerces a JSON-decoded port (float64, int, or json.Number) to uint16.
+func portOf(v interface{}) uint16 {
+	switch n := v.(type) {
+	case float64:
+		return uint16(n)
+	case int:
+		return uint16(n)
+	case int64:
+		return uint16(n)
+	}
+	return 0
 }
 
 func setGeo(geo map[string]interface{}, city *geoip2.City) {
