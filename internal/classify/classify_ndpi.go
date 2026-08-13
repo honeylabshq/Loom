@@ -84,7 +84,17 @@ static void shim_classify(const unsigned char *payload, int plen,
     // MATCH_BY_PORT / MATCH_BY_IP: those are the "it's on port 3306 so probably
     // mysql" guesses we're replacing. Per-call unique IPs (above) stop the
     // generic flow cache from bleeding one event's label onto the next.
-    if (flow->confidence >= NDPI_CONFIDENCE_DPI_CACHE) {
+    //
+    // Named equality, not an ordinal >= threshold: ndpi_confidence_t's member
+    // *values* are not a stable API across nDPI releases. On 4.2/4.4,
+    // NDPI_CONFIDENCE_MATCH_BY_IP sits below DPI_CACHE, so `>= DPI_CACHE`
+    // happened to exclude it; upstream has since reordered the enum (4.8/dev)
+    // to put MATCH_BY_IP *between* DPI and DPI_AGGRESSIVE, so the same `>=`
+    // check would start accepting IP-guessed flows as DPI matches again after
+    // a routine libndpi upgrade, with nothing here to catch it. The member
+    // *names* are the part of nDPI's API that stays stable.
+    if (flow->confidence == NDPI_CONFIDENCE_DPI ||
+        flow->confidence == NDPI_CONFIDENCE_DPI_CACHE) {
         unsigned short id = proto.app_protocol;
         if (id == NDPI_PROTOCOL_UNKNOWN) id = proto.master_protocol;
         if (id != NDPI_PROTOCOL_UNKNOWN) {
