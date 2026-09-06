@@ -1,0 +1,31 @@
+version: 2
+
+# Loom is the enrichment pipeline that runs in production and is a public
+# repository, and until 2026-09-05 nothing watched either half of its supply
+# chain: no dependabot config, and vulnerability alerts were switched off at the
+# repository level, so a vulnerable Go module here would have been reported by
+# nobody.
+#
+# Grouped minor and patch updates keep this to one pull request a week rather
+# than one per module. Majors come through on their own, because a Go major is a
+# new import path and is never a rubber stamp.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
