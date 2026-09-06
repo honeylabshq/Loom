@@ -1,5 +1,11 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+#
+# Third place the Go version is written down, and the one that cannot read
+# go.mod for itself, so it has to be kept at or above the `go` directive by
+# hand. A newer toolchain builds an older directive, so running ahead is safe
+# and running behind is the failure: "go.mod requires go >= 1.25.0 (running go
+# 1.21.13)" is what a dependency bump looked like before this was raised.
+FROM golang:1.25-alpine AS builder
 RUN apk add --no-cache ca-certificates
 WORKDIR /build
 
