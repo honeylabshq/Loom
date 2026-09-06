@@ -1,10 +1,10 @@
 module github.com/StefanGrimminck/Loom
 
-go 1.21
+go 1.22
 
 require (
 	github.com/BurntSushi/toml v1.4.0
-	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/rs/zerolog v1.32.0
