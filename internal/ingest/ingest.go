@@ -23,6 +23,9 @@ type Handler struct {
 	ProcessBatch  func(sensorID string, events []map[string]interface{}) error
 	Log           zerolog.Logger
 	Metrics       *Metrics
+	// Versions records the X-Sensor-Version each authenticated sensor sends;
+	// nil records nothing.
+	Versions *SensorVersions
 }
 
 // ServeHTTP implements http.Handler.
@@ -69,6 +72,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if headerSensorID == "" {
 		headerSensorID = sensorID
 	}
+	// Recorded for every authenticated request, a rate-limited one included:
+	// which version a sensor runs does not depend on whether this batch fits.
+	h.Versions.Observe(headerSensorID, r.Header.Get(VersionHeader))
 
 	// Per-sensor rate limit
 	if !h.RateLimiter.Allow(headerSensorID) {

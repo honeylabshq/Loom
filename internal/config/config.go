@@ -96,6 +96,10 @@ type LoggingConfig struct {
 
 type ObservabilityConfig struct {
 	MetricsEnabled bool `toml:"metrics_enabled"`
+	// SensorStateFile keeps the version each sensor reports across restarts
+	// (see ingest.SensorVersions). Empty keeps it in memory only. The
+	// directory must be writable by Loom.
+	SensorStateFile string `toml:"sensor_state_file"`
 }
 
 // Load reads config from path (TOML) and applies environment overrides (secrets).

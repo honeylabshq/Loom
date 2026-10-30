@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/honeylabshq/Loom/internal/auth"
+	"github.com/honeylabshq/Loom/internal/buildinfo"
 	"github.com/honeylabshq/Loom/internal/classify"
 	"github.com/honeylabshq/Loom/internal/config"
 	"github.com/honeylabshq/Loom/internal/enrich"
@@ -25,7 +27,12 @@ import (
 
 func main() {
 	configPath := flag.String("config", "loom.toml", "Path to config file (TOML)")
+	showVersion := flag.Bool("version", false, "print the commit this binary was built from and exit")
 	flag.Parse()
+	if *showVersion {
+		os.Stdout.WriteString("loom " + buildinfo.Commit() + "\n")
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -161,11 +168,26 @@ func main() {
 
 	var metricsHandler http.Handler
 	var ingestMetrics *ingest.Metrics
+	var promReg *prometheus.Registry
 	if cfg.Observability.MetricsEnabled {
-		promReg := prometheus.NewRegistry()
+		promReg = prometheus.NewRegistry()
 		metricsHandler = promhttp.HandlerFor(promReg, promhttp.HandlerOpts{})
 		ingestMetrics = ingest.NewMetrics(promReg)
+		build := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "loom_build_info",
+			Help: "1 for the commit and Go version this binary was built from",
+		}, []string{"commit", "go_version"})
+		promReg.MustRegister(build)
+		build.WithLabelValues(buildinfo.Commit(), buildinfo.GoVersion()).Set(1)
 	}
+	log.Info().Str("commit", buildinfo.Commit()).Msg("loom starting")
+
+	var versionReg prometheus.Registerer
+	if promReg != nil {
+		versionReg = promReg
+	}
+	sensorVersions := ingest.NewSensorVersions(cfg.Observability.SensorStateFile, versionReg, log)
+	defer sensorVersions.Save()
 
 	ingestHandler := &ingest.Handler{
 		Validator:     validator,
@@ -183,8 +205,9 @@ func main() {
 			}
 			return nil
 		},
-		Log:     log,
-		Metrics: ingestMetrics,
+		Log:      log,
+		Metrics:  ingestMetrics,
+		Versions: sensorVersions,
 	}
 
 	srv := &server.Server{
@@ -200,6 +223,23 @@ func main() {
 		IPRateLimit:       cfg.Limits.GlobalIPRPS,
 		TrustProxyHeaders: cfg.Server.TrustProxyHeaders,
 		MaxConnections:    cfg.Server.MaxConnections,
+		ManagementRoutes: map[string]http.Handler{
+			"/version": jsonHandler(func() any {
+				return map[string]string{
+					"service":    "loom",
+					"commit":     buildinfo.Commit(),
+					"started_at": buildinfo.Started().Format(time.RFC3339),
+					"go_version": buildinfo.GoVersion(),
+				}
+			}),
+			"/sensors": jsonHandler(func() any {
+				list := sensorVersions.Snapshot()
+				if list == nil {
+					list = []ingest.SensorState{}
+				}
+				return map[string]any{"sensors": list}
+			}),
+		},
 	}
 
 	go func() {
@@ -210,4 +250,14 @@ func main() {
 
 	<-ctx.Done()
 	log.Info().Msg("shutting down")
+}
+
+// jsonHandler serves the value body() returns as JSON, for the management
+// listener's read-only routes.
+func jsonHandler(body func() any) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(body())
+	})
 }
