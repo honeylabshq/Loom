@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/honeylabshq/Loom/internal/ingest"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/honeylabshq/Loom/internal/ingest"
 	"github.com/rs/zerolog"
 )
 
@@ -25,6 +25,9 @@ type Server struct {
 	KeyFile        string
 	ListenAddr     string
 	ManagementAddr string
+	// ManagementRoutes are extra GET routes on the management listener, such
+	// as /version and /sensors. Never on the ingest listener.
+	ManagementRoutes map[string]http.Handler
 	// IPRateLimit is the per-IP request limit per second before auth; 0 = default
 	// (100 rps), negative = disabled.
 	IPRateLimit int
@@ -67,6 +70,9 @@ func (s *Server) Run(ctx context.Context) error {
 		mgmt.Get("/ready", s.serveReadiness)
 		if s.MetricsHandler != nil {
 			mgmt.Handle("/metrics", s.MetricsHandler)
+		}
+		for path, h := range s.ManagementRoutes {
+			mgmt.Method(http.MethodGet, path, h)
 		}
 		mgmtSrv := &http.Server{
 			Addr:              s.ManagementAddr,

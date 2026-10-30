@@ -101,3 +101,6 @@ format = "json"
 
 [observability]
 metrics_enabled = true
+# Keeps the version each sensor reports (X-Sensor-Version) across restarts;
+# served on the management port at /sensors. Leave unset for memory only.
+# sensor_state_file = "/var/lib/loom-state/sensors.json"

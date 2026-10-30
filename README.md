@@ -68,7 +68,7 @@ go build -o loom ./cmd/loom
 
 - **Endpoints:** `POST /api/v1/ingest`, `POST /ingest`, or `POST /` (all equivalent).
 - **Transport:** HTTPS in production (TLS 1.3+); HTTP only for local development.
-- **Headers:** `Authorization: Bearer <token>` (required); `X-Spip-ID` (sensor id; must match the token’s sensor).
+- **Headers:** `Authorization: Bearer <token>` (required); `X-Spip-ID` (sensor id; must match the token’s sensor); `X-Sensor-Version` (optional: the sensor software's version, such as `v1.4.0-12-g3d9d463`; recorded per sensor, never added to the events).
 - **Body:** JSON array of ECS event objects.
 
 Response codes: 200/204 success; 400 invalid request; 401 unauthorized; 413 payload or batch too large; 429 rate limit; 500/503 server errors.
@@ -77,7 +77,9 @@ Response codes: 200/204 success; 400 invalid request; 401 unauthorized; 413 payl
 
 - **Liveness:** `GET /health` or `GET /live` on the management port → 200 when the process is running.
 - **Readiness:** `GET /ready` → 200 when the service can accept ingest and use output; 503 otherwise.
-- **Metrics:** `GET /metrics` (Prometheus) when `observability.metrics_enabled = true`.
+- **Metrics:** `GET /metrics` (Prometheus) when `observability.metrics_enabled = true`, including `loom_build_info{commit}` and `loom_sensor_version_info{sensor_id,version}`.
+- **Version:** `GET /version` → `{"service":"loom","commit":...,"started_at":...,"go_version":...}`, the commit this binary was built from (`unknown` when the build recorded none).
+- **Sensors:** `GET /sensors` → `{"sensors":[{"sensor_id","version","version_since","last_seen"}]}`, the version each sensor last sent in `X-Sensor-Version` (empty when it sends none) and since when. Set `observability.sensor_state_file` to keep this across restarts.
 
 Management port is set by `server.management_listen_address`. Bind it to loopback (`127.0.0.1:9080`): it has no authentication and must not be exposed to the internet. Loom logs a warning at startup if the address is bound to all interfaces.
 
@@ -91,6 +93,7 @@ Management port is set by `server.management_listen_address`. Bind it to loopbac
 | **Enrichment** | `geoip_db_path`, `asn_db_path`, `enrichment.dns.*` |
 | **Output**   | `type`: `stdout`, `clickhouse`, or `elasticsearch`; ClickHouse/ES options and env credentials (see example). For ClickHouse, optional `output.outbox.*` enables local disk spooling and retry on DB failures. |
 | **Logging**  | `level`, `format` (json or console) |
+| **Observability** | `metrics_enabled`, `sensor_state_file` (keeps the per-sensor versions across restarts; its directory must be writable by Loom) |
 
 ## Deployment
 
