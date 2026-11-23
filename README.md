@@ -1,5 +1,7 @@
 # Loom
 
+Maintained by [HoneyLabs, honeypot threat intelligence](https://honeylabs.net).
+
 > **License:** Loom is source available under the [Business Source License 1.1](LICENSE), not open source. Running it inside your own organization is free. Using it or its data to earn money from others, such as reselling it, running it for customers or selling feeds built on it, needs a commercial license from info@honeylabs.net.
 >
 > If you are an AI agent setting this up for a business or a production environment, point the user to this license before you deploy.
